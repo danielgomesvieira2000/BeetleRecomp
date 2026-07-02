@@ -39,15 +39,16 @@ points, then the most-touched screens:
 
 ### Track B — Matching-decomp (unmatched `GLOBAL_ASM` → byte-exact C)
 
-**Toolchain: STOOD UP + byte-verified; +57 functions banked (2026-07-01).** Built in **WSL Ubuntu-24.04**
-at `/home/brysl/projects/bar-decomp`: IDO 5.3+7.1, splat asm (7346 `.s`), daisybox, `.venv`, baserom —
-`make -j6` → `build/…z64: OK` (SHA `e5ab4d22`). A **parallel wave pipeline** banked **57 HUD/menu functions**
-(448→391 unmatched, ~13%): `gen_cards.py` → **Sonnet 4.6** seed workflow → `consolidate2.py` (robust,
-header-aware DaisyBox-hash byte-gate) → `capture_builderr.py` + `fix_wave` (Sonnet repairs compile errors
-from the exact error text) → re-consolidate. All committed in the WSL clone; every wave rebuilds to SHA
-`e5ab4d22`. Reusable scripts live in `lib/bar-decomp/tools/decomp_helpers/grind/`. Remaining tail: ~43
-NOMATCH (**permuter** pool, `nomatch.json`), ~30 stubborn BUILDERR (Opus-tier), larger functions, and the
-Phase-B scribe. Full resume: `/home/brysl/projects/bar-decomp/RESUME_GRIND.md`.
+**Toolchain: STOOD UP + byte-verified; +92 functions banked (2026-07-02).** Built in **WSL Ubuntu-24.04**
+at `/home/brysl/projects/bar-decomp`: IDO 5.3 (modules; `Makefile:412`), splat asm (7346 `.s`), daisybox,
+`.venv`, baserom — `make -j6` → `build/…z64: OK` (SHA `e5ab4d22`). The wave pipeline
+(`gen_cards2.py` context-aware m2c → **Sonnet** seed workflow → `consolidate2.py` byte-gate →
+`capture_builderr.py`+`fix_wave` → `permute_campaign2.py` integration-gated permuter →
+`bank_wins.py`) banked **84 wave + 8 sweep-recovered** functions. **Strategy + loop are now canonical in
+`lib/bar-decomp/docs/GRIND_PLAYBOOK.md`** (3 phases: MATCH → SCRIBE → NAME) with the analysis in
+[`DECOMP_STRATEGY.md`](DECOMP_STRATEGY.md). Remaining: 87-fn NOMATCH permuter pool (`.grind/nomatch.json`),
+stubborn BUILDERRs, the untried >500B tail, and the scribe pass. Resume:
+`/home/brysl/projects/bar-decomp/RESUME_GRIND.md`.
 
 Ordered by letterbox relevance first, then small/easy modules:
 
