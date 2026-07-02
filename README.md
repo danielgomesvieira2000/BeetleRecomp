@@ -4,11 +4,12 @@ A work-in-progress **native PC port of _Beetle Adventure Racing!_ (N64, USA)** b
 **static recompilation** with the [N64Recomp][N64Recomp] toolchain — the same approach
 behind [Zelda 64: Recompiled](https://github.com/Zelda64Recomp/Zelda64Recomp).
 
-> **Status (2026-06-28): boots deep into the game.** RT64 (D3D12) initializes, the window opens,
-> the ROM is recognized, libultra inits, and the **uv module overlay bridge** registers BAR's
-> relocatable modules as they load (57+) so recompiled module code runs. It is **not playable
-> yet** — it stops on module data-section relocation (the deep part of the ~130-module challenge),
-> and audio/input are still stubs. See **[docs/STATUS.md](docs/STATUS.md)** to resume.
+> **Status (2026-07-01): playable.** Boots through the intros and menus into races and renders at
+> 60 fps, with keyboard + gamepad input and audio working. Ships an in-app launcher / settings /
+> cheats / pause menu (RmlUi over RT64), internal-resolution scaling (defaults to display-native),
+> MSAA + a VI "divot" seam filter, and high-FPS interpolation (phase 1). A handful of polish items
+> remain — see **[docs/TODO.md](docs/TODO.md)** for the roadmap and **[docs/STATUS.md](docs/STATUS.md)**
+> to resume.
 
 > **No game data is included.** You must supply your own legally-dumped USA ROM
 > (SHA-1 `e5ab4d226c08d22f68a2edcc48870203e67454b8`). No ROM, assets, or other copyrighted
@@ -28,61 +29,46 @@ what makes this port tractable.
 
 ## Relationship to the decomp
 
-This repo consumes the **[BeetleDecomp](https://github.com/bryankruman/BeetleDecomp)** project,
-vendored as a submodule at `lib/bar-decomp`. Two things are important to understand:
+This repo vendors the **[BeetleDecomp](https://github.com/bryankruman/BeetleDecomp)** project as a
+submodule at `lib/bar-decomp`. Two things are worth knowing up front:
 
 **The recomp does *not* compile the decomp's C.** Static recompilation translates the original
-ROM's MIPS *machine code* into C automatically — the decomp's hand-written C is never built into
-the port. What the recomp uses from the decomp is:
+ROM's MIPS *machine code* into C automatically; the decomp's hand-written C is never built into the
+port. What the port takes from the decomp is:
 
-| From the decomp | What for | How it gets here |
-|---|---|---|
-| The **ELF** (machine code + symbols) that rebuilds the ROM byte-for-byte | Input to N64Recomp | built in WSL → `scripts/fetch-elf.*` (artifact, never committed) |
-| **Headers + symbol tables** (`include/`, `linker_scripts/us/symbol_addrs.txt`) | Readable names + typed interfaces for generated code and patches | `lib/bar-decomp` submodule (source) |
-| **Segmentation / module + reloc layout** (`config/us/modules.yaml`, future `recomp.ld`) | Overlay handling | `lib/bar-decomp` submodule (source) |
-
-**Decomp matching progress does not change the game.** Because the decomp is *byte-matching*, a
-function written in C produces the exact same machine code as its raw-asm version — so recompiling
-it yields identical output. Matching progress is therefore not a prerequisite for the port. What *does* flow downstream from
-decomp improvements is: **better symbol names**, **struct/types** (readability of generated code and
-patches), and — most importantly — **segmentation and reloc layout** (the per-module `recomp.ld`,
-see [Roadmap](#roadmap)).
-
-**Pulling decomp updates is deliberate, not silent.** The submodule is pinned to a commit. To adopt
-decomp improvements: `git submodule update --remote lib/bar-decomp`, then rebuild the ELF *at that
-same commit* in WSL and re-run the recompiler. (Keep your WSL decomp checkout and this submodule on
-the same commit so the ELF and headers agree.)
-
-> **Build-locality caveat:** do **not** run the decomp's `make` on this Windows-checked-out
-> submodule — its IDO/MIPS build needs the WSL ext4 filesystem (NTFS hits exec-bit/perf problems).
-> The submodule here is for *source reference* (headers/symbols); build the ELF in your WSL decomp
-> checkout and fetch it in.
-
-### Where modifications go (the modifier layer)
-
-**Never edit the decomp to change the game.** Keep it a faithful, byte-matching mirror of the
-original. Modifications live in two recomp-owned layers:
-
-- **`patches/`** — C compiled to MIPS that **overrides** game functions by name (`RECOMP_PATCH`) or
-  **hooks** their entry/return (`RECOMP_HOOK`). This is the game-logic modifier layer: bug fixes,
-  physics tweaks, widescreen, new features. Patches link *before* the recompiled output, so they win.
-- **`src/` runtime** — the native C++ host: rendering (RT64), input, audio, saves, config, resolution,
-  and any new capabilities. This is the "interpreter / host" layer.
-- For distributable mods, the recomp ecosystem also has a **mod system** (RecompModTool / `.nrm`).
-
-The decomp stays a pure reconstruction of the original; all added or changed code lives here.
-
-## Verified findings (2026-06-28)
-
-| Question | Result |
+| From the decomp | What for |
 |---|---|
-| **Graphics microcode** | Stock **`gspF3DEX2_fifo`** (decomp `gfx_ucode: f3dex2`) — *not* a custom Paradigm ucode. **RT64 supports F3DEX2 directly.** |
-| **Audio** | Standard libultra (`alAudioFrame`/`alSeqFileNew`/ALSndPlayer) wrapped in Paradigm's "UV" middleware. Recompilable. |
-| **Saves** | Controller Pak only (`osPfs*`); no EEPROM/SRAM/Flash. The port must emulate a Controller Pak. |
-| **Memory** | 4 MB; **no Expansion Pak**, no TLB-mapped code (flat KSEG0). Favorable. |
+| The **symbol-rich ELF** that rebuilds the ROM byte-for-byte | Input to N64Recomp (built in WSL, never committed) |
+| **Headers + symbol tables** | Readable names + typed interfaces for generated code and patches |
+| **Segmentation / module + reloc layout** | Overlay handling for BAR's ~130 relocatable modules |
+
+Because the decomp is *byte-matching*, its matching progress doesn't change the port — recompiling a
+function yields identical output whether it started as hand-written C or raw asm. What flows
+downstream from decomp work is better **names and types** (readability of generated code and patches)
+and the **module layout** that makes the port tractable.
+
+**Changes never go in the decomp** — keep it a faithful mirror of the original. Modifications live in
+two recomp-owned layers:
+
+- **`patches/`** — C cross-compiled to MIPS that **overrides** (`RECOMP_PATCH`) or **hooks**
+  (`RECOMP_HOOK`) game functions by name. This is the game-logic layer: bug fixes, widescreen, new
+  features. Patches link *before* the recompiled output, so they win.
+- **`src/`** — the native C++ host: rendering (RT64), input, audio, saves, config, and the in-app UI.
+
+See [BUILDING.md](BUILDING.md) for how the ELF is produced and how to pull decomp updates.
+
+## Technical profile
+
+The properties that made BAR a good recomp candidate, and which shape the runtime:
+
+| Aspect | Detail |
+|---|---|
+| **Graphics microcode** | Stock **`gspF3DEX2_fifo`** (decomp `gfx_ucode: f3dex2`) — *not* a custom Paradigm ucode. RT64 supports F3DEX2 directly. |
+| **Audio** | Standard libultra (`alAudioFrame`/`alSeqFileNew`/ALSndPlayer) wrapped in Paradigm's "UV" middleware. |
+| **Saves** | Controller Pak only (`osPfs*`); no EEPROM/SRAM/Flash. The port emulates a Controller Pak. |
+| **Memory** | 4 MB; **no Expansion Pak**, no TLB-mapped code (flat KSEG0). |
 | **Entry point** | `0x80000400` (ROM header offset 0x8 == splat `entry` segment vram). |
-| **Candidate quality** | **Good** — no custom-ucode blocker. |
-| **Biggest challenge** | The **~130 relocatable code modules** (`ai`, `battle`, `race`, …, `uv*_rom`). Supported by N64Recomp, but this is where the work lives. |
+| **Module layout** | The **~130 relocatable code modules** (`ai`, `battle`, `race`, …, `uv*_rom`) were the crux of the port; the uv module overlay bridge (`src/main/overlay_bridge.cpp`) registers them at load. |
 
 The toolchain license analysis and research sources are in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
@@ -104,20 +90,31 @@ recomp.ld ┘   (per-module layout)                       (BeetleRecomp.toml)   
 ```
 BeetleRecomp/
 ├── BeetleRecomp.toml      # main N64Recomp config (entrypoint 0x80000400, ELF, overlays)
-├── patches.toml           # config for the C patches (single-file override mode)
-├── overlays.us.txt        # relocatable module/overlay section list (see Roadmap)
-├── CMakeLists.txt         # build skeleton (adapt link wiring from Zelda64Recomp)
+├── patches.toml           # config for the C patches (MIPS override/hook layer)
+├── overlays.us.txt        # relocatable module/overlay section list
+├── CMakeLists.txt         # host-app build (clang-cl + Ninja)
 ├── COPYING                # AGPL-3.0 (inherited from the decomp)
 ├── THIRD_PARTY_NOTICES.md # dependency licenses + research sources
-├── BUILDING.md            # full build instructions (Windows + Linux/WSL)
-├── elf/                   # the decomp ELF lands here (git-ignored)
-├── syms/                  # symbol TOMLs for patches (git-ignored)
-├── lib/                   # submodules: N64ModernRuntime, rt64, RmlUi, lunasvg, N64Recomp
-├── patches/               # C compiled to MIPS that overrides game functions
-├── src/{main,game,ui}/    # the native port runtime (C++)
+├── BUILDING.md            # full build instructions (Windows + Linux/macOS)
+├── docs/                  # STATUS.md (resume guide), TODO.md (roadmap), design notes
+├── src/
+│   ├── main/              # native host: RT64 render context, input, audio, overlay bridge, config
+│   ├── game/              # game-facing config schema (graphics.json)
+│   └── ui/                # in-app RmlUi launcher / settings / cheats / pause menu + renderer
+├── patches/               # C compiled to MIPS that overrides/hooks game functions
 ├── include/               # port headers
+├── rsp/                   # RSP microcode glue
+├── scripts/               # setup / fetch-elf / gen-overlays / fix-recompiled helpers
 ├── assets/  icons/        # bundled app assets
-└── scripts/               # setup / fetch-elf / gen-overlays helpers
+├── elf/  syms/            # decomp ELF + patch symbol TOMLs land here (git-ignored)
+└── lib/                   # git submodules:
+    ├── bar-decomp                 # BeetleDecomp — symbols, headers, module/reloc layout (source ref)
+    ├── N64Recomp                  # the static recompiler (MIPS → C)
+    ├── N64ModernRuntime           # librecomp (CPU) + ultramodern (OS/audio/input)   [bryankruman fork]
+    ├── rt64                       # RT64 renderer (D3D12 / Vulkan / Metal)            [bryankruman fork]
+    ├── RmlUi                      # HTML/CSS UI toolkit for the in-app menus
+    ├── lunasvg                    # SVG rasterizer (RmlUi dependency)
+    └── freetype-windows-binaries  # prebuilt Freetype for RmlUi text (Windows)
 ```
 
 ## Quickstart
@@ -129,38 +126,33 @@ BeetleRecomp/
 scripts/setup.sh                  # or scripts/setup.ps1 on Windows PowerShell
 
 # 2. Build the decomp ELF (in WSL), then copy it in.
-#    (WSL) cd ~/projects/bar-decomp && source .venv/bin/activate && make -j6
+#    (WSL) cd ~/projects/bar-decomp && source .venv/bin/activate && make recomp
 scripts/fetch-elf.sh              # or scripts/fetch-elf.ps1
 
 # 3. Recompile the game to C.
 ./N64Recomp BeetleRecomp.toml     # emits RecompiledFuncs/*.c
+scripts/fix-recompiled.sh         # REQUIRED codegen fixup — re-run after every regeneration
 
-# 4. Configure + build the port.
-cmake -S . -B build-cmake -G Ninja -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release
+# 4. Configure + build the port (clang-cl on Windows, clang on Linux/macOS).
+cmake -S . -B build-cmake -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl -DCMAKE_BUILD_TYPE=Release
 cmake --build build-cmake -j
 ```
 
-## Roadmap
+## Status & roadmap
 
-The structure is in place; these are the real milestones, in order:
+The bring-up milestones — the per-module recomp ELF, overlay wiring, first boot, F3DEX2 rendering,
+input, audio, and Controller Pak saves — are **done**, and the game is playable. Current work is
+polish and features:
 
-1. **Per-module recomp ELF (the crux).** The decomp's *matching* ELF
-   (`beetleadventurerac.us.elf`) is 170 MB with 2,492 sections — splat splits each module into
-   many per-file sub-sections (`.UVAN_0`, `.UVBT_0`, …), which is **not** the
-   one-section-per-module grouping N64Recomp needs for relocatable overlays. The decomp already
-   has a stubbed **`make recomp` → `build/recomp.elf`** target, but its
-   `linker_scripts/us/recomp.ld` does not exist yet. **Writing that linker script (one
-   relocatable section per module, with the module reloc tables) is the first task**, and it is
-   shared work with BeetleDecomp.
-2. **Overlay wiring.** Populate `overlays.us.txt` from the recomp ELF
-   (`scripts/gen-overlays.sh`) and get N64Recomp to emit clean `LOOKUP_FUNC` / `RELOC_*` for
-   every module.
-3. **First boot.** Wire `src/main` to librecomp/ultramodern/RT64 (adapt from
-   Zelda64Recompiled), load the ROM, reach the title screen.
-4. **Graphics.** Confirm BAR's exact F3DEX2 sub-revision renders cleanly in RT64; fix per-game
-   quirks (reflections/fog/menus that GLideN64 historically needed tweaks for).
-5. **Input, audio, and Controller Pak saves.**
-6. **Patches.** Override hardware-poking functions via `patches/` as needed.
+- **Rendering** — internal-resolution scaling (defaults to display-native), MSAA + a VI "divot"
+  seam filter, and high-FPS interpolation (phase 1 live; throughput/artifact phases pending).
+- **Known issues** — skippable legal/logo screens, a one-frame menu-transition flash, choppy
+  track-map preview, audio latency-vs-clip tuning.
+- **Features** — controller rebind UI, mod-manager UI, an app icon, and more settings surfaced in
+  the in-app menu.
+
+The live checklist is **[docs/TODO.md](docs/TODO.md)**; per-item status and resume detail is in
+**[docs/STATUS.md](docs/STATUS.md)**.
 
 ## License
 
@@ -175,6 +167,7 @@ AGPL is the correct umbrella. Vendored dependencies in `lib/` retain their own l
   [bar-decomp](https://github.com/synamaxmusic/bar-decomp) / RE work this builds on.
 - **Wiseguy** and contributors — [N64Recomp], [N64ModernRuntime], Zelda 64: Recompiled.
 - **RT64 contributors** — the renderer.
+- **RmlUi** and **lunasvg** — the in-app menu toolkit and SVG rasterizer.
 
 [N64Recomp]: https://github.com/N64Recomp/N64Recomp
 [N64ModernRuntime]: https://github.com/N64Recomp/N64ModernRuntime

@@ -10,8 +10,8 @@ Two **separate** toolchains are involved — don't conflate them:
 Cross-platform by design (RT64: **D3D12** on Windows, **Vulkan** on Linux, **Metal** on macOS).
 Windows is the primary target.
 
-> **Status:** the runtime host (`src/main`, `CMakeLists.txt`) is an in-progress draft. The first
-> build will surface issues to iterate on; this documents the intended setup.
+> **Status:** the runtime host (`src/main`, `CMakeLists.txt`) builds and runs the game. See
+> [docs/STATUS.md](docs/STATUS.md) for the current state and the verified build environment.
 
 ## Prerequisites — Windows (no full Visual Studio IDE needed)
 

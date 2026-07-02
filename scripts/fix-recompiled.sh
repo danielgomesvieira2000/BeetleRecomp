@@ -153,3 +153,21 @@ for f in "$RF"/*.c; do
 done
 echo "fix-recompiled: applied cooperative-preempt prologue poll in $preempt_n file(s)"
 
+# (G) SP_STATUS hardware-register write in _uvScDlistRecover (store at 0x80004024). The display-list-
+# overflow recovery path writes 0x2902 to SP_STATUS_REG (0xA4040010) to reset the RSP. Under RT64 HLE
+# there is no real RSP and the RCP register range (0xA4xxxxxx) isn't backed by the rdram buffer, so the
+# raw store faults (access violation) whenever recovery runs (observed under debugger/CPU load). The
+# osSendMesg recovery notifications after it are fine — only the hardware poke is meaningless. Guard the
+# store so an RCP-register base (0xA4xxxxxx) is skipped; normal RDRAM stores are unaffected.
+sp_n=0
+sp_fix='    if (((uint32_t)ctx->r15 & 0xFF000000u) != 0xA4000000u) MEM_W(0X10, ctx->r15) = ctx->r14;  // BAR FIX: skip RCP-register (SP_STATUS 0xA4040010) write — RT64 HLE has no real RSP; the raw store faults'
+for f in "$RF"/*.c; do
+    if grep -q '0x80004024: sw' "$f" && ! grep -q 'BAR FIX: skip RCP-register' "$f"; then
+        awk -v fix="$sp_fix" '
+            { if ($0 ~ /^[[:space:]]*MEM_W\(0X10, ctx->r15\) = ctx->r14;[[:space:]]*$/ && prev ~ /0x80004024:/) print fix; else print; prev=$0 }
+        ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+        sp_n=$((sp_n+1))
+    fi
+done
+echo "fix-recompiled: guarded SP_STATUS hardware write in _uvScDlistRecover in $sp_n file(s)"
+

@@ -41,9 +41,11 @@
 
 #ifdef BEETLE_ENABLE_UI
 #include "ui/bar_ui.h"                        // bar_ui — RmlUi launcher + settings + cheats menu (Tier 2)
+#include "gui/rt64_file_dialog.h"            // RT64::FileDialog — native "Open ROM" picker (first-run ROM select)
 #endif
 
-// The ROM the launcher's "Play" button loads (also the auto-start ROM when the UI is disabled).
+// The most-recently selected ROM path, handed to bar_ui for its (non-boot) "Play" request. The game
+// itself boots from the ROM cached in the config dir (see main()'s ROM-source block), not from here.
 // Set in main() before recomp::start() so the create_window callback can hand it to bar_ui.
 static std::filesystem::path g_default_rom_path;
 
@@ -609,6 +611,49 @@ void bar_restart_game() {
     ultramodern::quit();   // exit this instance (the fresh one takes over)
 }
 
+// ---------------------------------------------------------------------------------------------------
+// First-run ROM setup helpers. These run in main() BEFORE recomp::start(), i.e. before the renderer
+// and before ultramodern's message-box callback exist. Static recompilation ships no game data — the
+// player supplies their own legally-dumped ROM, which librecomp validates by hash and caches in the
+// config directory so it's only requested once.
+// ---------------------------------------------------------------------------------------------------
+
+// Show a player-facing dialog and log the same text. SDL_ShowSimpleMessageBox works with no window,
+// unlike the stderr-only message_box() above (which nobody sees when launched from a GUI/launcher).
+static void bar_user_message(uint32_t sdl_flags, const char* msg) {
+    std::fprintf(stderr, "[BeetleRecomp] %s\n", msg);
+#ifdef BEETLE_ENABLE_UI
+    SDL_ShowSimpleMessageBox(sdl_flags, "Beetle Adventure Racing: Recompiled", msg, nullptr);
+#else
+    (void)sdl_flags;
+#endif
+}
+
+// Human-readable explanation for a ROM validation failure.
+static const char* bar_rom_error_text(recomp::RomValidationError err) {
+    switch (err) {
+        case recomp::RomValidationError::FailedToOpen:     return "The selected file could not be opened.";
+        case recomp::RomValidationError::NotARom:          return "That file doesn't look like a Nintendo 64 ROM.";
+        case recomp::RomValidationError::IncorrectRom:     return "That isn't a Beetle Adventure Racing ROM.";
+        case recomp::RomValidationError::IncorrectVersion: return "Wrong version - this port needs the USA release of Beetle Adventure Racing.";
+        case recomp::RomValidationError::NotYet:           return "That ROM is recognized but isn't supported yet.";
+        default:                                           return "The ROM could not be loaded.";
+    }
+}
+
+// Validate `path` and, on success, cache it in the config dir (start_game() then loads it from there).
+// On failure, explain why to the player. Returns true only when a valid ROM is now stored.
+static bool bar_select_and_report(const std::filesystem::path& path, std::u8string& game_id) {
+    recomp::RomValidationError err = recomp::select_rom(path, game_id);
+    if (err == recomp::RomValidationError::Good) {
+        g_default_rom_path = path;   // keep bar_ui's (non-boot) "Play" request in sync
+        return true;
+    }
+    bar_user_message(SDL_MESSAGEBOX_ERROR,
+        (std::string(bar_rom_error_text(err)) + "\n\n" + path.string()).c_str());
+    return false;
+}
+
 int main(int argc, char** argv) {
     (void)argc; (void)argv;
 #ifdef _WIN32
@@ -693,37 +738,67 @@ int main(int argc, char** argv) {
     // TODO(BAR): bar::register_patches(); once patches exist.
 
     // ---- ROM source ----
-    // The launcher's "Play" button loads this ROM; with the UI disabled it's the auto-start ROM.
-    g_default_rom_path = (argc > 1)
-        ? std::filesystem::path(argv[1])
-        : std::filesystem::path("C:/Users/Bryan/Downloads/Beetle Adventure Racing (USA).z64"); // TODO(BAR): native ROM picker
-
+    // Resolution order: a ROM already validated + cached in the config dir from a previous run
+    // (is_rom_valid) > an explicit path argument (dev / CLI) > a native "Open ROM" picker on first
+    // run. select_rom() validates the hash and copies the ROM into the config dir; start_game() then
+    // loads it back from there, so the player is only ever asked for the ROM once.
     std::u8string game_id = supported_games[0].game_id;
+    recomp::check_all_stored_roms();                 // populate is_rom_valid() from the config dir
+    bool have_rom = recomp::is_rom_valid(game_id);
+
+    // An explicit path (e.g. `BeetleRecomp "C:\path\Beetle.z64"`) wins and is re-validated + cached.
+    if (!have_rom && argc > 1) {
+        have_rom = bar_select_and_report(std::filesystem::path(argv[1]), game_id);
+    }
+
+#ifdef BEETLE_ENABLE_UI
+    // First run (or the cached ROM went missing / changed hash): ask the player to locate their ROM
+    // with a native file picker (RT64 wraps nativefiledialog-extended). It needs no renderer, so it's
+    // safe here, before recomp::start(). Loop until a valid ROM is chosen or the user cancels.
+    if (!have_rom) {
+        bar_user_message(SDL_MESSAGEBOX_INFORMATION,
+            "Beetle Adventure Racing: Recompiled needs your own copy of the original game.\n\n"
+            "Please select your Beetle Adventure Racing (USA) ROM to continue.");
+    }
+    while (!have_rom) {
+        RT64::FileDialog::initialize();
+        std::filesystem::path picked =
+            RT64::FileDialog::getOpenFilename({ RT64::FileFilter{ "Nintendo 64 ROM", "z64,n64,v64" } });
+        RT64::FileDialog::finish();
+
+        if (picked.empty()) {   // user cancelled the dialog
+            bar_user_message(SDL_MESSAGEBOX_ERROR,
+                "No ROM was selected, so Beetle Adventure Racing: Recompiled will now exit.");
+            return EXIT_FAILURE;
+        }
+        have_rom = bar_select_and_report(picked, game_id);
+    }
+#else
+    if (!have_rom) {
+        message_box("No ROM configured. Pass the ROM path as the first argument "
+                    "(this build has the in-game picker disabled).");
+        return EXIT_FAILURE;
+    }
+#endif
 
     // Coordinator: the game thread blocks in wait_for_game_started() until start_game() runs. The VI
     // thread only seeds a dummy OSViMode while !is_game_started(); starting before its first tick
     // makes update_vi() deref a null mode — so we wait for g_bar_vi_ticked (renderer presented a
     // frame, which also means the launcher can draw over it). recomp::start() below blocks the main
     // thread, so this runs on a detached thread.
-    std::thread([game_id]() mutable {   // mutable: recomp::select_rom takes a non-const std::u8string&
+    std::thread([game_id]() {
         using namespace std::chrono_literals;
         for (int i = 0; i < 500 && !g_bar_vi_ticked.load(); i++) {
             std::this_thread::sleep_for(10ms);
         }
 
-        std::filesystem::path rom = g_default_rom_path;
+        // The ROM was already validated + cached in main(); start_game() loads it from the config dir.
         // Start the game right away — do NOT wait for "Play". The launcher/settings/cheats menu is an
         // OVERLAY drawn over the running game: RT64 only drives the UI's render+input render-hook while
         // the game is producing frames, so the menu cannot be interactive before the game starts. The
         // launcher stays shown over the (booting) game until the user clicks Play (which hides it);
         // F1 reopens the menu in-game. BAR_SKIP_LAUNCHER starts with the overlay hidden (headless).
 
-        recomp::RomValidationError rom_err = recomp::select_rom(rom, game_id);
-        if (rom_err != recomp::RomValidationError::Good) {
-            message_box(("Could not load ROM \"" + rom.string() + "\" (validation error "
-                         + std::to_string(static_cast<int>(rom_err)) + ")").c_str());
-            return;
-        }
         recomp::start_game(game_id);
 #ifdef BEETLE_ENABLE_UI
         bar_ui::on_game_started();   // mark game started (enables F1); the launcher stays as an overlay
