@@ -1,0 +1,41 @@
+name: notify
+
+# Public-repo tripwire. Tells the private builder to rebuild:
+#   - push to main         -> rolling "continuous" prerelease
+#   - push of a vX.Y.Z tag -> a real versioned release of that exact commit
+# It reveals nothing about how the build works — just a dispatch to a repo whose NAME is a secret.
+# Runs on public-repo (free, unmetered) minutes; the actual build runs privately.
+#
+# Secrets (this public repo — Settings → Secrets and variables → Actions):
+#   PRIVATE_DISPATCH_PAT : fine-grained PAT, Contents:Write on the private builder repo (to POST a dispatch)
+#   PRIVATE_REPO         : the private repo, e.g. bryankruman/BeetleRecomp-private (kept out of this file)
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+    paths-ignore: [ '**.md', 'docs/**', '.gitignore', '.gitattributes' ]   # (ignored for tag pushes)
+
+permissions: {}
+
+concurrency:
+  group: notify-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask the private builder to rebuild
+        env:
+          REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}   # 'branch' or 'tag'
+        run: |
+          payload=$(jq -n --arg ref "$REF" --arg name "$REF_NAME" --arg type "$REF_TYPE" \
+            '{event_type:"public-updated", client_payload:{ref:$ref, ref_name:$name, ref_type:$type}}')
+          curl -fsS -X POST \
+            -H "Authorization: Bearer ${{ secrets.PRIVATE_DISPATCH_PAT }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ secrets.PRIVATE_REPO }}/dispatches" \
+            -d "$payload"
