@@ -1,6 +1,6 @@
 # Project Status & Resume Guide
 
-_Last updated: 2026-06-30_
+_Last updated: 2026-07-03_
 
 ## TL;DR
 - ✅ **Builds + links + runs** → `build-cmake/BeetleRecomp.exe` (native Windows, clang-cl, RT64/D3D12).
@@ -13,8 +13,9 @@ _Last updated: 2026-06-30_
 - ✅ **Audio working** — RSP `aspMain` ucode wired; correct PCM transform (no-byteswap + channel-swap);
   latency + transition-crackle fixed (see WIP item 2 below).
 - ✅ **Coventry Cove crash FIXED** — heap OOM; heap cap extended 4 MB → 8 MB (`fix-recompiled.sh` rule A).
-- 🚧 **Current focus: polish.** Four items raised 2026-06-30 — see **[Current WIP](#current-wip--polish-items-2026-06-30)**.
-  Audio (item 2) is done; legal-screen skip, menu-transition flash, and track-map fps remain.
+- 🚧 **Current focus: polish.** Since 2026-06-30 the settings menu + Controls dialog + true in-game pause
+  + render-res/MSAA/SSAA/divot seam fixes + letterbox controls all landed (see **[TODO.md](TODO.md)**). Of
+  the original four WIP items, audio is done; **legal-screen skip, menu-transition flash, and track-map fps remain.**
 
 ## Current WIP — polish items (2026-06-30)
 
@@ -175,11 +176,15 @@ See [BUILDING.md](../BUILDING.md).
 - Most `os_unimpl_stubs.cpp` functions stay no-ops, but **`__osSiRawStartDma` now has real behavior**
   (posts the SI completion + writes a controller-read response into PIF RAM — this is what unblocked input
   and the black screen). Others (`__osViSwapContext`, `__osTimerInterrupt`, PI/thread-queue) remain no-ops.
-- **Input:** keyboard → N64 pad is wired (`bar_poll_keyboard`); real gamepad mapping + a rebind UI are TODO.
-- **High-FPS / interpolation:** `enable_instant_present` is still a no-op and `get_display_framerate`
-  returns 60 — RT64 frame interpolation is not yet enabled. Design + a partial implementation live on branch
-  `feature/settings-menu-and-high-fps`; see [SETTINGS_MENU_AND_HIGH_FPS.md](SETTINGS_MENU_AND_HIGH_FPS.md).
-- **Settings menu:** none yet (env-var flags only — `BAR_*`); the in-game menu is on the feature branch.
+- **Input:** ✅ keyboard **and** SDL controllers wired; a full **Controls dialog** (4-port config,
+  rebinding, Rumble + Controller Paks, `input.json`) landed 2026-07-01 (`4b1f6f8`). Remaining: an
+  in-game rebind/gameplay/save round-trip runtime test.
+- **High-FPS / interpolation:** ✅ Phase 1 enabled + merged (`2277b32`) — interpolation on,
+  `get_display_framerate` live, `enable_instant_present` wired. Remaining: Phase 2 (build throughput) +
+  Phase 3 (artifact polish) — see [TODO.md](TODO.md) + [SETTINGS_MENU_AND_HIGH_FPS.md](SETTINGS_MENU_AND_HIGH_FPS.md).
+- **Settings menu:** ✅ live (Tier-2 RmlUi over RT64) — Settings/Controls/Cheats/Pause pages, with render
+  res + SSAA + MSAA + divot seam filter exposed. Remaining knobs to surface (FPS counter, audio
+  buffer/device, mod manager) tracked in [TODO.md](TODO.md).
 
 ## How to build + run + debug (Windows, headless)
 ```bash
@@ -239,10 +244,10 @@ film-roll animate cleanly with no pre-pan flash. `skip`=SkipBuffering, `early`=P
 > The forward-looking checklist now lives in **[TODO.md](TODO.md)** (consolidated todolist,
 > including the 7 priorities raised 2026-06-30). The summary below is kept for context.
 
-- **Polish items 1/3/4** above (legal-screen skip, menu-transition flash, track-map fps).
-- **High-FPS / RT64 interpolation** — enable it (branch `feature/settings-menu-and-high-fps`).
-- **Settings menu** — surface the `BAR_*` flags (intro skip, audio buffer, high-FPS) in an in-game menu.
-- **Real gamepad input** + a rebind UI (keyboard works today).
+- **Polish items 1/3/4** above (legal-screen skip, menu-transition flash, track-map fps) — still open.
+- **High-FPS Phase 2/3** — Phase 1 is merged/active; throughput (`/GL`+`/LTCG`, thread priority) +
+  interpolation artifact polish remain.
+- **Settings menu** — live; remaining knobs to surface: on-screen FPS counter, audio buffer/device, mod manager.
 - Per-game F3DEX2 rendering quirks as they surface.
 
 ## Tooling note: N64Recomp builds on Windows now

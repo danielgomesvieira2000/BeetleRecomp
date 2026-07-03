@@ -1,6 +1,6 @@
 # BeetleRecomp — TODO / Roadmap
 
-_Last updated: 2026-06-30_
+_Last updated: 2026-07-03_
 
 The single consolidated task list for the port. Pulls together the open items that were
 previously scattered across [STATUS.md](STATUS.md) (the "Current WIP" + "Still stubbed" +
@@ -30,10 +30,10 @@ frame in the render context so RT64 keeps presenting the frozen scene → the ov
 Heartbeat-verified: pause freezes the sim with draw_hook still ~60fps; resume continues; no crash.
 See memory `menu-and-high-fps-research` for the technique.
 
-### R4. ⬜ Settings to enhance render resolution
-Expose internal render-resolution scaling (RT64 `resolutionMultiplier` / the `ds_option` supersample
-field) in the Settings menu — beyond the existing Original/2x/Auto. **Files:** `src/ui/...config.rml`,
-`src/ui/bar_ui.cpp`, `src/main/rt64_render_context.cpp`, `src/game/config.*`.
+### R4. ✅ Settings to enhance render resolution — DONE 2026-06-30 (2bcf633)
+Render-resolution scaling + supersampling now exposed in Settings (`res_option` + `ds_option` SSAA),
+applied on restart; Native high-res scales added on the N64ModernRuntime fork. Default internal
+resolution is now display-native/Auto (`a078074`). Same work as item **#3**. Detail in STATUS.md.
 
 ### R5. ⬜ Setting to disable car LOD
 Disable level-of-detail swapping for cars (always render the high-detail model). Needs to find the
@@ -72,7 +72,8 @@ needs a decorator for that; folded into a future pass).
 **Files touched:** `src/ui/assets/{launcher,config,cheats}.rml`, `src/ui/ui_renderer.cpp` (build fix:
 `createCommandList()` takes no args in this plume version), `src/ui/bar_ui.cpp`.
 
-### 2. 🚧 Fix see-through seams between world-geometry planes — investigated 2026-06-30, plan ready
+### 2. ✅ Fix see-through seams between world-geometry planes — BOTH FIXES SHIPPED 2026-06-30 (4a46488, 16cec5e)
+_(Optional follow-up: one RenderDoc capture to reconfirm the seam class. Implementation below is done.)_
 **Problem:** adjacent/abutting (often coplanar) world-geometry tris show a thin see-through crack at
 the shared edge, revealing the background/skybox.
 **Root cause (CONFIRMED, not depth/decal):** classic N64 HLE artifact. The RDP fills shared edges via
@@ -88,7 +89,7 @@ by the window scale-up. (Decal/Z-fight _flicker_ is a different bug, out of scop
 **Full plan + exact code changes:** [SEAM_FIX_PLAN.md](SEAM_FIX_PLAN.md). Two fixes, each with a
 Settings-menu option:
 
-#### 2A. ⬜ MSAA + Supersampling (mask — cheap, existing knobs)
+#### 2A. ✅ MSAA + Supersampling — DONE 2026-06-30 (4a46488): default 4× MSAA + SSAA select
 Adds edge coverage + supersamples thin geometry → softens/reduces seams. MSAA control already exists;
 this defaults it to 4× and exposes the existing (but menu-less) `ds_option` SSAA knob.
 - Default `msaa_option` None → **MSAA4X** ([config.cpp:129](../src/game/config.cpp)).
@@ -97,7 +98,7 @@ this defaults it to 4× and exposes the existing (but menu-less) `ds_option` SSA
   (int, like `rr_manual`). Both apply **on restart** (the `m_live_*` lock).
 - **Files:** `src/game/config.cpp`, `src/ui/assets/config.rml`, `src/ui/bar_ui.cpp`.
 
-#### 2B. ⬜ VI "divot" filter (the faithful fix — reconstruct the hardware concealer)
+#### 2B. ✅ VI "divot" filter — DONE 2026-06-30 (4a46488), threshold tuned to 0.12 (16cec5e); default Auto
 A per-channel **horizontal median-of-3 at native-pixel spacing**, folded into the existing VI pixel
 shader (the shader already samples the fb at native-texel granularity → no new pass/pipeline/shader
 file; runs at the correct resolution; composes with all filtering). New **Seam filter (VI divot)**
@@ -123,7 +124,7 @@ larger follow-up).
 **Still worth one RenderDoc capture** of a seam to reconfirm it's the coverage/edge class (background
 through the crack), not a decal/Z-fight case.
 
-### 3. ⬜ Add a high-**resolution** rendering mode
+### 3. ✅ Add a high-**resolution** rendering mode — DONE 2026-06-30 (2bcf633; same work as R4)
 **Note:** this is resolution scaling (internal render res), *distinct from* the high-**fps**
 interpolation work in [SETTINGS_MENU_AND_HIGH_FPS.md](SETTINGS_MENU_AND_HIGH_FPS.md) (which is
 already wired/active). RT64 supports internal-resolution upscaling natively.
@@ -136,7 +137,7 @@ Settings document. Pairs with item 1 and the existing config-persistence (`graph
 **Files:** `src/game/config.cpp`, `src/ui/bar_ui.cpp` + `config.rml`,
 `src/main/rt64_render_context.cpp` (config → RT64 mapping).
 
-### 4. ⬜ Add texture smoothing / upscaling for the high-res mode
+### 4. ⬜ Add texture smoothing / upscaling for the high-res mode  _(unblocked — #3 done; SSAA shipped, but the texture-filtering toggle + texture-pack support are still TODO)_
 Depends on item 3. Two levers in RT64: (a) **texture filtering** (three-point vs bilinear / linear
 filtering of N64 textures) exposed as a graphics option, and (b) **high-res texture-pack** support
 (`lib/rt64/TEXTURE-PACKS.md`) for replacement textures. Start with (a) — a filtering toggle in the
@@ -158,15 +159,16 @@ underrun. Tune with `BAR_AUDIO_BUFFER`.
 **Files:** `lib/N64ModernRuntime/ultramodern/src/audio.cpp`, `src/main/main.cpp` (`bar_open_audio`),
 `src/main/bar_preempt.cpp`, `src/main/hw_stubs.cpp`.
 
-### 6. 🚧 Input-management UI with modern-controller support — **(a) controller support DONE 2026-06-30**
+### 6. ✅ Input-management UI with modern-controller support — DONE (a: 2026-06-30 · b: 2026-07-01 `4b1f6f8`; in-game rebind/gameplay/save round-trip still needs a runtime pass)
 **Done (a):** SDL game-controller support added (`bar_sample_gamepad`/`bar_poll_gamepad` in
 [main.cpp](../src/main/main.cpp)) — hotplug open/close in `update_gfx`, sampled on the main thread into
 an atomic snapshot (thread-safe vs the game/SI poll threads), folded into `bar_poll_keyboard` (additive
 to the keyboard, focus-gated). Default map: A→A B→B Start→Start L/R shoulders→L/R, LT→Z, D-pad→D-pad,
 right-stick→C-buttons, left-stick→analog. The controller also navigates the menu (D-pad→arrows, A→Enter
 via synthesized key events through the existing RmlUi nav path). Build-verified; behavior not yet
-runtime-tested (needs a controller). **Still open (b):** a **Controls** rebind tab + rumble
-(`input_set_rumble` is still a no-op) + per-controller profiles persisted like `graphics.json`.
+runtime-tested (needs a controller). **(b) DONE 2026-07-01 (`4b1f6f8`):** Controls dialog — 4-port
+device config, rebinding (keyboard + controller), Rumble + Controller Paks, persisted to `input.json`.
+Remaining: an in-game rebind/gameplay/save round-trip test.
 **Was verified:** input was **keyboard-only**. `input_get` ([main.cpp](../src/main/main.cpp))
 reads `SDL_GetKeyboardState`; `SDL_INIT_GAMECONTROLLER` is initialized
 ([main.cpp:149](../src/main/main.cpp)) but no controller is ever opened/read; `input_set_rumble`
@@ -268,6 +270,13 @@ Phase 1 (enable interpolation + `get_display_framerate` + `enable_instant_presen
 ## ✅ Recently done (context — detail in STATUS.md)
 
 Kept short so these don't get re-attempted:
+- ✅ **Settings buildout (2026-06-30/07-01):** render-resolution scaling + SSAA + default 4× MSAA + VI
+  divot seam filter (R4/#2A/#2B/#3 — `2bcf633`, `4a46488`, `16cec5e`); default internal res → Auto (`a078074`).
+- ✅ **Controls dialog + 4-port input** — rebinding, Rumble + Controller Paks, `input.json` persistence
+  (item 6b — `4b1f6f8`). In-game rebind/gameplay/save round-trip still needs a runtime pass.
+- ✅ **True in-game pause** — RT64 repeat-last-frame while the sim is frozen (`c270752`).
+- ✅ **HUD/menu letterbox + widescreen controls** — `present_fill_mode` Pillarbox/Crop/Stretch (`d244b5a`).
+- ✅ **First-run ROM picker + cached-ROM boot** + SP_STATUS dlist-recovery guard (`c3c8971`).
 - ✅ Boots → races at **60 fps**, keyboard input, audio playing (overlay bridge, VI/SI/RSP).
 - ✅ **Black screen** (controller/SI `osRecvMesg` deadlock) fixed.
 - ✅ **Menu 60 fps** (SI requeue busy-spin) fixed.
@@ -293,11 +302,10 @@ Kept short so these don't get re-attempted:
   was proven to freeze the overlay too (RT64 stops presenting once the game thread is frozen). A real
   freeze needs BAR's own pause (renders the paused scene) — see follow-up below.
 
-### Follow-up: true in-game pause (real sim freeze)
-The Esc pause menu is currently a soft pause. A real freeze must keep frames flowing while the sim is
-stopped — i.e., hook BAR's **native pause** (the race-pause that renders a frozen scene) rather than
-freezing the game thread (which kills the renderer/overlay). Game-specific; needs the pause-module
-(`lib/bar-decomp/.../pause.c`) entry points + a state hook. Memory: `menu-and-high-fps-research`.
+### Follow-up: true in-game pause (real sim freeze) — ✅ DONE 2026-07-01 (c270752)
+Routed the runtime pause into RT64's repeat-last-frame path (`State::externalPaused` +
+`Application::setPaused` on the rt64 / N64ModernRuntime forks), so frames keep flowing while the sim is
+frozen and the overlay stays live. Built clean; recommend one in-game confirm. Memory: `pause-freeze-root-cause`.
 - ✅ **BAR Cheats menu** (`src/main/bar_cheats.*` + `src/ui/assets/cheats.rml`, F1 in-game overlay) —
   host-side RDRAM pokes for unlock-all / reveal in-game cheat menu / solo race / infinite laps / super
   speed / steering assist / show-FPS / no-glare. Vetted fixed-address list + detail in memory
