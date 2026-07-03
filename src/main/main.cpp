@@ -51,8 +51,11 @@ static std::filesystem::path g_default_rom_path;
 
 #define SDL_MAIN_HANDLED                      // we provide our own main()/entry; don't let SDL hijack it
 #include <SDL.h>
-#include <SDL_syswm.h>                        // SDL_GetWindowWMInfo -> native HWND
 #ifdef _WIN32
+#include <SDL_syswm.h>                        // SDL_GetWindowWMInfo -> native HWND. Windows only: on Linux the
+                                             //   WindowHandle is the SDL_Window* itself (see renderer_context.hpp),
+                                             //   and this header would drag in <X11/X.h>, whose `None` macro
+                                             //   collides with our enum values (SaveType::None, Pak::None, ...).
 #include <timeapi.h>                          // timeBeginPeriod (1ms timer resolution); links winmm
 #endif
 
@@ -144,9 +147,8 @@ bar_create_rt64_render_context(uint8_t* rdram, ultramodern::renderer::WindowHand
 extern std::atomic<bool> g_bar_renderer_ready;   // RT64 finished setup
 extern std::atomic<bool> g_bar_vi_ticked;        // renderer presented a frame (VI thread seeded a mode)
 
-// SDL window / gfx (gfx_callbacks_t). RT64 attaches to this window's native HWND.
+// SDL window / gfx (gfx_callbacks_t). RT64 attaches to this window (its native HWND on Windows).
 static SDL_Window* g_window = nullptr;
-static HWND g_bar_hwnd = nullptr;   // native window handle (for keyboard focus gating)
 
 // Controller state now lives in bar::input (src/main/bar_input.cpp): it owns the open SDL_GameController
 // handles (still MAIN THREAD ONLY, via on_controller_added/removed below), samples every assigned pad
@@ -190,16 +192,6 @@ static ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callba
         std::fprintf(stderr, "[BeetleRecomp] SDL_CreateWindow failed: %s\n", SDL_GetError());
         return {};
     }
-    SDL_SysWMinfo wm_info;
-    SDL_VERSION(&wm_info.version);
-    if (SDL_GetWindowWMInfo(g_window, &wm_info) != SDL_TRUE) {
-        std::fprintf(stderr, "[BeetleRecomp] SDL_GetWindowWMInfo failed: %s\n", SDL_GetError());
-        return {};
-    }
-    // create_window runs on the same (main) thread that pumps update_gfx below, so the
-    // window's owning thread id is this thread.
-    g_bar_hwnd = wm_info.info.win.window;
-
 #ifdef BEETLE_ENABLE_UI
     // Register the RmlUi render hooks now, before the gfx thread constructs RT64 (recomp::start
     // calls create_window on this thread *before* spawning the gfx thread that runs
@@ -207,7 +199,20 @@ static ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callba
     bar_ui::install(g_window, g_default_rom_path);
 #endif
 
+#ifdef _WIN32
+    // Windows: RT64 attaches to the native HWND and needs the id of the thread that owns the window.
+    // create_window runs on the same (main) thread that pumps update_gfx below, so that's this thread.
+    SDL_SysWMinfo wm_info;
+    SDL_VERSION(&wm_info.version);
+    if (SDL_GetWindowWMInfo(g_window, &wm_info) != SDL_TRUE) {
+        std::fprintf(stderr, "[BeetleRecomp] SDL_GetWindowWMInfo failed: %s\n", SDL_GetError());
+        return {};
+    }
     return ultramodern::renderer::WindowHandle{ wm_info.info.win.window, GetCurrentThreadId() };
+#else
+    // Linux/Android: WindowHandle is the SDL_Window* itself (RT64 derives the native handle from it).
+    return g_window;
+#endif
 }
 
 static void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t /*data*/) {
@@ -583,7 +588,9 @@ extern "C" uint16_t bar_poll_keyboard(int port, int8_t* stick_x, int8_t* stick_y
     // navigation (arrows/enter) doesn't also drive the car.
     if (bar_ui::menu_capturing_input()) return 0;
 #endif
-    if (g_bar_hwnd != nullptr && GetForegroundWindow() != g_bar_hwnd) return 0; // only when focused
+    // Only read the keyboard while our window actually holds input focus, so we don't drive the car
+    // when the user has tabbed away. SDL tracks focus the same way on every platform.
+    if (g_window != nullptr && !(SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS)) return 0;
     return bar::input::resolve_port(port, stick_x, stick_y);
 }
 
