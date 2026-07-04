@@ -168,6 +168,11 @@ extern std::atomic<bool> g_bar_vi_ticked;        // renderer presented a frame (
 // SDL window / gfx (gfx_callbacks_t). RT64 attaches to this window (its native HWND on Windows).
 static SDL_Window* g_window = nullptr;
 
+// Defined further down (with the first-run ROM helpers): pops a player-facing dialog (SDL message box,
+// works with no window) and logs the same text. Forward-declared here so the window/renderer setup paths
+// can report a missing-Vulkan-driver failure to the user instead of dying silently to stderr.
+static void bar_user_message(uint32_t sdl_flags, const char* msg);
+
 // Controller state now lives in bar::input (src/main/bar_input.cpp): it owns the open SDL_GameController
 // handles (still MAIN THREAD ONLY, via on_controller_added/removed below), samples every assigned pad
 // once per frame (bar::input::sample_all_ports), and resolves each of the 4 N64 ports from its
@@ -203,11 +208,39 @@ static ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callba
             win_h = h;
         }
     }
+    // RT64's backend is per-platform: D3D12 on Windows (it binds to the raw HWND, so the SDL window needs
+    // no graphics-API flag), Vulkan on Linux/Android, Metal on macOS. The Vulkan and Metal backends create
+    // their swapchain surface *through SDL* (SDL_Vulkan_CreateSurface / SDL_Metal_CreateView), which requires
+    // the window to have been created with the matching flag. Without it SDL fails the surface call with
+    // "The specified window isn't a Vulkan window" and RT64 then dereferences the null surface and segfaults.
+    // We deliberately omit the flag on Windows so RT64's default D3D12 path is unaffected.
+    Uint32 window_flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
+#if defined(__APPLE__)
+    window_flags |= SDL_WINDOW_METAL;
+#elif !defined(_WIN32)
+    window_flags |= SDL_WINDOW_VULKAN;
+#endif
     g_window = SDL_CreateWindow("Beetle Adventure Racing: Recompiled",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, win_w, win_h,
-        SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+        window_flags);
     if (g_window == nullptr) {
+        // With SDL_WINDOW_VULKAN set, SDL tries to load the Vulkan loader here — so this branch also fires
+        // when the machine has no usable Vulkan driver at all. Tell the player how to fix it rather than
+        // leaving them with a silent black window / a stderr line no GUI launcher ever shows.
         std::fprintf(stderr, "[BeetleRecomp] SDL_CreateWindow failed: %s\n", SDL_GetError());
+#if !defined(_WIN32) && !defined(__APPLE__)
+        bar_user_message(SDL_MESSAGEBOX_ERROR,
+            "Beetle Adventure Racing: Recompiled could not create a Vulkan window.\n\n"
+            "Your system is most likely missing a Vulkan driver. Install your GPU's Vulkan support:\n"
+            "  - AMD / Intel (Mesa):  sudo apt install mesa-vulkan-drivers\n"
+            "  - NVIDIA:              install the proprietary NVIDIA driver package\n"
+            "  - Then verify with:    vulkaninfo   (from the vulkan-tools package)\n\n"
+            "The detailed SDL error was printed to the terminal.");
+        // Fatal and unrecoverable: exit cleanly right here rather than returning an empty handle and letting
+        // RT64 crash on a null window (or raising a second, vaguer dialog from ultramodern's setup-failure
+        // path). The modal dialog above has already been dismissed by the user by this point.
+        std::_Exit(EXIT_FAILURE);
+#endif
         return {};
     }
 #ifdef BEETLE_ENABLE_UI
@@ -612,8 +645,12 @@ extern "C" uint16_t bar_poll_keyboard(int port, int8_t* stick_x, int8_t* stick_y
     return bar::input::resolve_port(port, stick_x, stick_y);
 }
 
-// Error handling (error_handling::callbacks_t).
-static void message_box(const char* msg) { std::fprintf(stderr, "[BeetleRecomp] %s\n", msg); }
+// Error handling (error_handling::callbacks_t). ultramodern calls this for FATAL startup errors — most
+// importantly the renderer-setup failures in events.cpp (Vulkan loader missing / no compatible GPU), after
+// which it throws to abort. Route it through a real SDL dialog (bar_user_message, forward-declared above)
+// rather than only stderr, so a player who double-clicked the app actually sees why it refused to start
+// instead of being left with a silent black window. bar_user_message still logs the same text to stderr.
+static void message_box(const char* msg) { bar_user_message(SDL_MESSAGEBOX_ERROR, msg); }
 
 // "Restart Game" (pause menu): the recompiled game can't be cleanly re-entered in-process, so restart
 // the whole process — relaunch the exe with the same arguments, then quit this instance. Declared in

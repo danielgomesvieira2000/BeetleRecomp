@@ -257,7 +257,21 @@ RT64Context::RT64Context(uint8_t* rdram, ultramodern::renderer::WindowHandle win
     setup_result = map_setup_result(app->setup(thread_id));
     chosen_api = map_graphics_api(app->chosenGraphicsAPI);
     if (setup_result != ultramodern::renderer::SetupResult::Success) {
-        std::fprintf(stderr, "[BeetleRecomp] RT64 setup failed (result %d)\n", static_cast<int>(setup_result));
+        // Name the likely cause — a bare result code is useless in a bug report. The window is already
+        // open by now, so a failure here is exactly what leaves the player staring at a black window.
+        const char* reason = "unknown error";
+        switch (setup_result) {
+            case ultramodern::renderer::SetupResult::DynamicLibrariesNotFound:
+                reason = "required graphics libraries were not found"; break;
+            case ultramodern::renderer::SetupResult::InvalidGraphicsAPI:
+                reason = "the configured graphics API is not valid for this platform"; break;
+            case ultramodern::renderer::SetupResult::GraphicsAPINotFound:
+                reason = "no supported graphics API is available (on Linux this usually means the Vulkan loader, libvulkan, is missing)"; break;
+            case ultramodern::renderer::SetupResult::GraphicsDeviceNotFound:
+                reason = "no compatible GPU/Vulkan device was found (install or update your GPU's Vulkan driver; verify with vulkaninfo)"; break;
+            default: break;
+        }
+        std::fprintf(stderr, "[BeetleRecomp] RT64 setup failed: %s (result %d)\n", reason, static_cast<int>(setup_result));
         app = nullptr;
         return;
     }
