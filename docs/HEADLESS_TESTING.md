@@ -77,3 +77,22 @@ RT64_SHOT_TRIGGER=shot_req RT64_SHOT_OUT=shot.png BAR_SKIP_LAUNCHER=1 \
   BAR_AUTOPLAY="120:0 30:8000 150:0 30:0800 150:0 30:8000 700:0" ./BeetleRecomp.exe &
 sleep 26; touch shot_req; sleep 2.5   # -> shot.png is the main menu
 ```
+
+## Debugging crashes under a debugger (cdb)
+
+Launch the game under the console debugger with **`tools/cdb-run.sh`**. It catches a fatal
+(second-chance) access violation, dumps registers + all thread stacks (with line numbers if
+`BeetleRecomp.pdb` is next to the exe), and writes a full minidump — while passing first-chance
+exceptions through so normal play is uninterrupted.
+
+```sh
+tools/cdb-run.sh                 # run under cdb; on a crash, dumps stacks + build-cmake/bar_crash.dmp
+BAR_DUMP=/tmp/x.dmp tools/cdb-run.sh   # override the dump path (BAR_BUILD / BAR_LOG / BAR_CDB too)
+```
+
+**Why the script exists (do not launch cdb by hand without `-hd`):** a process *created by* a
+debugger gets Windows' NT **debug heap**, which for a continuously-allocating game manifests as
+steadily climbing memory, worsening frame times, and eventually timing artifacts (audio underruns,
+visual glitches) — a debugger artifact, **not** a game bug, that never appears when the `.exe` is run
+directly. The script bakes in `-hd` + `_NO_DEBUG_HEAP=1` to keep the normal heap. It resolves cdb from
+the WinDbg Store package via `Get-AppxPackage` (the `WindowsApps` dir can't be globbed).
