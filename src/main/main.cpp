@@ -87,11 +87,29 @@ static RspExitReason bar_rsp_ucode_stub(uint8_t* /*rdram*/, uint32_t /*ucode_add
 // Graphics ucode (F3DEX2) goes to RT64 (HLE), not here.
 RspExitReason aspMain(uint8_t* rdram, uint32_t ucode_addr);
 
+// BAR's aspMain (recompiled from libultra 2.0I) hits an unhandled indirect-jump target on certain audio
+// tasks — notably Beetle Battle — returning e.g. RspExitReason::UnhandledJumpTarget. run_task() treats any
+// non-Broke exit as fatal and quick_exit()s the whole process (task_thread_func, events.cpp). Wrap aspMain
+// so a single bad audio task degrades to silence for that task instead of taking the game down; normal
+// tasks still run aspMain exactly as before. BAR_NO_AUDIO remains the coarse "disable all audio" escape.
+static RspExitReason bar_aspMain_guarded(uint8_t* rdram, uint32_t ucode_addr) {
+    RspExitReason reason = aspMain(rdram, ucode_addr);
+    if (reason != RspExitReason::Broke) {
+        static uint32_t warned = 0;
+        if (warned++ < 8) {
+            std::fprintf(stderr, "[BeetleRecomp] aspMain exited abnormally (reason %d) on an audio task; "
+                         "skipping this task's audio instead of exiting the game\n", static_cast<int>(reason));
+        }
+        return RspExitReason::Broke;   // report a clean break so run_task() completes the task
+    }
+    return reason;
+}
+
 static RspUcodeFunc* get_rsp_microcode(const OSTask* task) {
     switch (task->t.type) {
         case M_AUDTASK: {
             static const bool audio_off = std::getenv("BAR_NO_AUDIO") != nullptr;
-            return audio_off ? bar_rsp_ucode_stub : aspMain;
+            return audio_off ? bar_rsp_ucode_stub : bar_aspMain_guarded;
         }
         default: {
             static bool warned = false;
