@@ -19,7 +19,7 @@ add_sub https://github.com/mikke89/RmlUi.git              lib/RmlUi
 add_sub https://github.com/sammycage/lunasvg.git          lib/lunasvg
 # N64Recomp arrives transitively via N64ModernRuntime, but we also need the
 # standalone recompiler executables, so vendor it directly too:
-add_sub https://github.com/N64Recomp/N64Recomp.git        lib/N64Recomp
+add_sub https://github.com/bryankruman/N64Recomp.git        lib/N64Recomp
 
 echo ">> Updating submodules recursively..."
 git submodule update --init --recursive
