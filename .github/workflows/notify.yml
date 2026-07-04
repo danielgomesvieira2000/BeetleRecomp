@@ -1,8 +1,8 @@
 name: notify
 
-# Public-repo tripwire. Tells the private builder to rebuild:
-#   - push to main         -> rolling "continuous" prerelease
-#   - push of a vX.Y.Z tag -> a real versioned release of that exact commit
+# Public-repo tripwire. Tells the private builder what to (re)build:
+#   - push to main                 -> rolling "Continuous" prerelease
+#   - publish a Release (vX.Y.Z)   -> binaries are built and attached to THAT release
 # It reveals nothing about how the build works — just a dispatch to a repo whose NAME is a secret.
 # Runs on public-repo (free, unmetered) minutes; the actual build runs privately.
 #
@@ -13,27 +13,55 @@ name: notify
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*' ]
-    paths-ignore: [ '**.md', 'docs/**', '.gitignore', '.gitattributes' ]   # (ignored for tag pushes)
+    paths-ignore: [ '**.md', 'docs/**', '.gitignore', '.gitattributes' ]
+  release:
+    # Fires when a Release is published (created-and-published, or a draft you publish).
+    # The tag already exists at this point, so the private builder can check that exact commit
+    # out and attach the resulting zips straight to this release.
+    types: [ published ]
 
 permissions: {}
 
 concurrency:
+  # main push -> refs/heads/main ; release -> refs/tags/<tag>. Distinct groups, so a release
+  # build is never cancelled by a later main push (and vice-versa).
   group: notify-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   dispatch:
+    # Loop-breaker: the private builder publishes the 'Continuous' prerelease with a PAT, and
+    # PAT-published releases DO re-trigger workflows (unlike the built-in GITHUB_TOKEN). Without
+    # this guard, each Continuous republish would dispatch another build, forever. User releases
+    # (any other tag) are unaffected.
+    if: github.event_name != 'release' || github.event.release.tag_name != 'Continuous'
     runs-on: ubuntu-latest
     steps:
-      - name: Ask the private builder to rebuild
+      - name: Work out what to build
+        id: what
         env:
-          REF: ${{ github.ref }}
+          EV: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
           REF_NAME: ${{ github.ref_name }}
-          REF_TYPE: ${{ github.ref_type }}   # 'branch' or 'tag'
+          REF_TYPE: ${{ github.ref_type }}
         run: |
-          payload=$(jq -n --arg ref "$REF" --arg name "$REF_NAME" --arg type "$REF_TYPE" \
-            '{event_type:"public-updated", client_payload:{ref:$ref, ref_name:$name, ref_type:$type}}')
+          if [ "$EV" = "release" ]; then
+            # Published Release -> build its exact tag; the builder attaches binaries to it.
+            echo "ref_name=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+            echo "ref_type=tag"          >> "$GITHUB_OUTPUT"
+          else
+            # Push to main -> the single rolling "Continuous" prerelease.
+            echo "ref_name=$REF_NAME" >> "$GITHUB_OUTPUT"
+            echo "ref_type=$REF_TYPE" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Ask the private builder to (re)build
+        env:
+          REF_NAME: ${{ steps.what.outputs.ref_name }}
+          REF_TYPE: ${{ steps.what.outputs.ref_type }}
+        run: |
+          payload=$(jq -n --arg name "$REF_NAME" --arg type "$REF_TYPE" \
+            '{event_type:"public-updated", client_payload:{ref_name:$name, ref_type:$type}}')
           curl -fsS -X POST \
             -H "Authorization: Bearer ${{ secrets.PRIVATE_DISPATCH_PAT }}" \
             -H "Accept: application/vnd.github+json" \
