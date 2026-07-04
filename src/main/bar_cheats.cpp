@@ -35,8 +35,9 @@ inline int32_t f32_bits(float f) { int32_t b; std::memcpy(&b, &f, sizeof(b)); re
 std::array<std::atomic<bool>, (std::size_t)Id::Count> g_enabled{};   // value-init -> all false
 
 const Info kInfo[(std::size_t)Id::Count] = {
-    { "unlock_all",        "Unlock everything",         "All cars, tracks, championships & battle arenas" },
-    { "reveal_cheat_menu", "Reveal in-game Cheat menu", "Unlocks BAR's hidden Daisy-box cheats (Options → Cheats)" },
+    { "unlock_all",        "Unlock everything",          "All cars, tracks, championships & battle arenas" },
+    { "unlock_arenas",     "Unlock Beetle Battle arenas", "All 9 multiplayer battle arenas (Airport .. Woods)" },
+    { "reveal_cheat_menu", "Reveal in-game Cheat menu",  "Unlocks BAR's hidden Daisy-box cheats (Options → Cheats)" },
     { "solo_race",         "Solo race (no rivals)",     "Removes the 7 AI opponents — set before a race" },
     { "infinite_laps",     "Infinite laps",             "The race never ends on lap count" },
     { "super_speed",       "Super top speed",           "Raises the car's max-speed cap (2×)" },
@@ -86,7 +87,20 @@ void apply_frame(uint8_t* rdram) {
         MEM_W(0, se(0x8002CFF4)) = 11;  // gNumOpenCars    : 3 starter + 8 unlockable Beetles
         MEM_W(0, se(0x8002CFF0)) = 6;   // gNumOpenTracks  : Coventry Cove .. Wicked Woods
         MEM_W(0, se(0x8002CFF8)) = 4;   // gNumOpenTourns  : Novice / Advanced / Pro / Bonus cups
-        MEM_W(0, se(0x8002CFFC)) = 9;   // gNumOpenMtracks : 9 Beetle Battle arenas (NOT mirror mode)
+    }
+
+    // --- Beetle Battle arenas. The arena-select menu gates on the 9 per-arena unlock BITS at
+    //     0x8002D000..0x8002D008 (=1 each) — NOT on the gNumOpenMtracks *count* (0x8002CFFC), which
+    //     only feeds the results-screen "N/9 arenas unlocked" counter. Setting just the count (the
+    //     original bug) left the battle maps locked. Verified against BAR's own unlock-everything
+    //     routine (func_selection @0x83C099C8, RecompiledFuncs/funcs_38.c:~15768): it writes exactly
+    //     these 9 bits (loop bounded by the count) plus the count itself. The upper 6 bits double as
+    //     the per-track "collected all 100 boxes" award flags. Also matches the community GameShark
+    //     "Unlock <arena> (Multi)" codes 8002D000..8002D008 (Airport..Woods). We set both the bits
+    //     (the real gate) and the count (so the menu and the results counter agree). ---
+    if (on(Id::UnlockAll) || on(Id::UnlockArenas)) {
+        MEM_W(0, se(0x8002CFFC)) = 9;                                     // gNumOpenMtracks (results counter)
+        for (int i = 0; i < 9; i++) MEM_B(i, se(0x8002D000)) = (int8_t)1; // per-arena availability bits
     }
 
     // --- Reveal BAR's hidden cheat menu: set the 18 gOpenCheatFlag bytes (0x8002D009..0x8002D01A) ---

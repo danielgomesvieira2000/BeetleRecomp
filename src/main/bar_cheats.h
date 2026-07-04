@@ -18,6 +18,7 @@ namespace bar_cheats {
 // Stable cheat ids. Keep in sync with kInfo[] (bar_cheats.cpp); the UI iterates these in order.
 enum class Id : int {
     UnlockAll = 0,    // unlock all cars / tracks / championships / battle arenas
+    UnlockArenas,     // unlock the 9 Beetle Battle arenas (per-arena flags 0x8002D000..0x8002D008)
     RevealCheatMenu,  // reveal BAR's own hidden in-game Cheats menu (the Daisy-box cheats)
     SoloRace,         // remove the rival AI cars
     InfiniteLaps,     // race never ends on lap count
