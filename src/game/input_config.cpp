@@ -80,12 +80,13 @@ static void from_json(const nlohmann::json& j, Bindings& bnd) {
 }
 
 static void to_json(nlohmann::json& j, const DeviceRef& d) {
-    j = nlohmann::json{ {"type", d.type}, {"guid", d.guid}, {"name", d.display_name} };
+    j = nlohmann::json{ {"type", d.type}, {"guid", d.guid}, {"name", d.display_name}, {"uid", d.uid} };
 }
 static void from_json(const nlohmann::json& j, DeviceRef& d) {
     d.type         = j.value("type", DeviceType::None);
     d.guid         = j.value("guid", std::string{});
     d.display_name = j.value("name", std::string{});
+    d.uid          = j.value("uid", std::string{});   // "" in pre-uid configs -> guid fallback matching
 }
 
 static void to_json(nlohmann::json& j, const PortConfig& p) {

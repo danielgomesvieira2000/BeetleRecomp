@@ -38,7 +38,9 @@ void sample_all_ports();                              // refresh per-port gamepa
 void flush_rumble();                                  // issue SDL rumble for ports that want it
 
 // Copied list of currently-connected controllers, for the Controls dialog's device dropdown.
-struct DeviceEntry { std::string guid; std::string name; };
+// `uid` is the stable per-physical-device id ("<guid>!<serial>" or "<guid>!#<n>" — see input_config
+// DeviceRef); `display` is `name` suffixed with " (n)" when several connected pads share a name.
+struct DeviceEntry { std::string guid; std::string uid; std::string name; std::string display; };
 std::vector<DeviceEntry> enumerate_devices();
 
 // ---- GAME/SI-THREAD: per-port resolution + presence ----

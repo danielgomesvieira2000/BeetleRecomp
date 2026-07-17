@@ -64,6 +64,7 @@ struct OpenPad {
     SDL_GameController* gc = nullptr;
     SDL_JoystickID     id  = -1;
     std::string        guid;
+    std::string        uid;    // stable unique id: guid + "!" + serial, or guid + "!#<n>" ordinal
     std::string        name;
 };
 std::vector<OpenPad> g_pads;        // main thread only
@@ -126,15 +127,42 @@ uint32_t sample_pad(SDL_GameController* gc, const Bindings& binds) {
     return pack(btn, nx, ny);
 }
 
-// Find (main thread) an open controller whose GUID matches `guid`, skipping ones already claimed by a
-// lower port this sample. Returns the index into g_pads, or -1. Greedy-by-port-order so two identical
-// pads (same GUID) get distinct ports deterministically.
-int find_pad(const std::string& guid, const std::array<bool, 16>& claimed) {
-    if (guid.empty()) return -1;
-    for (int i = 0; i < (int)g_pads.size() && i < 16; i++) {
-        if (!claimed[i] && g_pads[i].guid == guid) return i;
+// Resolve each configured gamepad port to an open pad index (into g_pads), or -1. Caller holds
+// g_pads_mutex. Two passes so an exact uid assignment always wins over a legacy/replug fallback:
+//   1. exact uid match (the specific physical device the user picked in the Controls dialog),
+//   2. GUID fallback for the rest (pre-uid configs, or a serial-less pad whose ordinal changed),
+//      greedy by port order so two identical pads still land on distinct ports deterministically.
+// `claimed` marks which g_pads indices were consumed (for the port-0 auto-fold of unassigned pads).
+struct PadResolution { std::array<int, 4> port_pad; std::array<bool, 16> claimed; };
+PadResolution resolve_pads(const InputConfig& cfg) {
+    PadResolution r;
+    r.port_pad.fill(-1);
+    r.claimed.fill(false);
+    auto wants_pad = [&](int port) {
+        const PortConfig& pc = cfg.ports[port];
+        return pc.connected && pc.device.type == DeviceType::Gamepad;
+    };
+    for (int port = 0; port < 4; port++) {   // pass 1: exact uid
+        if (!wants_pad(port) || cfg.ports[port].device.uid.empty()) continue;
+        for (int i = 0; i < (int)g_pads.size() && i < 16; i++) {
+            if (!r.claimed[i] && g_pads[i].uid == cfg.ports[port].device.uid) {
+                r.port_pad[port] = i;
+                r.claimed[i] = true;
+                break;
+            }
+        }
     }
-    return -1;
+    for (int port = 0; port < 4; port++) {   // pass 2: GUID fallback
+        if (!wants_pad(port) || r.port_pad[port] >= 0 || cfg.ports[port].device.guid.empty()) continue;
+        for (int i = 0; i < (int)g_pads.size() && i < 16; i++) {
+            if (!r.claimed[i] && g_pads[i].guid == cfg.ports[port].device.guid) {
+                r.port_pad[port] = i;
+                r.claimed[i] = true;
+                break;
+            }
+        }
+    }
+    return r;
 }
 
 } // namespace
@@ -161,16 +189,31 @@ void on_controller_added(int sdl_device_index) {
     pad.guid = guid_string(SDL_JoystickGetGUID(js));
     const char* nm = SDL_GameControllerName(gc);
     pad.name = (nm != nullptr && *nm != '\0') ? nm : "Controller";
-    const std::string log_name = pad.name, log_guid = pad.guid;   // capture before the move below
+    // The GUID alone is not unique (it's bus/vendor/product — identical for two same-model pads and
+    // for ALL XInput pads), so derive a per-physical-device uid: prefer the hardware serial number
+    // (stable across sessions/replug), else the smallest free ordinal among connected same-GUID pads
+    // (stable within a session; across sessions it follows connection order).
+    const char* serial = SDL_JoystickGetSerial(js);
     {
         std::lock_guard<std::mutex> lk(g_pads_mutex);
         // Guard against a duplicate open for an instance we already track.
         for (const auto& p : g_pads) {
             if (p.id == pad.id) { SDL_GameControllerClose(gc); return; }
         }
-        g_pads.push_back(std::move(pad));
+        auto uid_taken = [&](const std::string& u) {
+            for (const auto& p : g_pads) { if (p.uid == u) return true; }
+            return false;
+        };
+        if (serial != nullptr && *serial != '\0' && !uid_taken(pad.guid + "!" + serial)) {
+            pad.uid = pad.guid + "!" + serial;   // taken = clone pads reporting one shared serial -> ordinal
+        } else {
+            int n = 1;
+            while (uid_taken(pad.guid + "!#" + std::to_string(n))) n++;
+            pad.uid = pad.guid + "!#" + std::to_string(n);
+        }
+        g_pads.push_back(pad);
     }
-    std::fprintf(stderr, "[BeetleRecomp] gamepad connected: %s [%s]\n", log_name.c_str(), log_guid.c_str());
+    std::fprintf(stderr, "[BeetleRecomp] gamepad connected: %s [%s]\n", pad.name.c_str(), pad.uid.c_str());
 }
 
 void on_controller_removed(int sdl_instance_id) {
@@ -189,28 +232,35 @@ std::vector<DeviceEntry> enumerate_devices() {
     std::lock_guard<std::mutex> lk(g_pads_mutex);
     std::vector<DeviceEntry> out;
     out.reserve(g_pads.size());
-    for (const auto& p : g_pads) out.push_back(DeviceEntry{ p.guid, p.name });
+    for (const auto& p : g_pads) out.push_back(DeviceEntry{ p.guid, p.uid, p.name, p.name });
+    // Disambiguate identically-named pads in the dropdown: "Xbox One Controller (1)" / "(2)", numbered
+    // in connection order. Singletons keep their bare name.
+    for (auto& d : out) {
+        int total = 0;
+        for (const auto& o : out) { if (o.name == d.name) total++; }
+        if (total < 2) continue;
+        int ordinal = 1;
+        for (const auto& o : out) {
+            if (&o == &d) break;
+            if (o.name == d.name) ordinal++;
+        }
+        d.display = d.name + " (" + std::to_string(ordinal) + ")";
+    }
     return out;
 }
 
 void sample_all_ports() {
     auto cfg = cfg_snapshot();
     std::lock_guard<std::mutex> lk(g_pads_mutex);
-    std::array<bool, 16> claimed{};
 
     // Explicit per-port gamepad assignments first (so they claim their pads before the auto-fold).
+    const PadResolution res = resolve_pads(*cfg);
     for (int port = 0; port < 4; port++) {
-        const PortConfig& pc = cfg->ports[port];
-        if (pc.connected && pc.device.type == DeviceType::Gamepad) {
-            int idx = find_pad(pc.device.guid, claimed);
-            if (idx >= 0) {
-                claimed[idx] = true;
-                g_port_state[port].store(sample_pad(g_pads[idx].gc, pc.bindings), std::memory_order_relaxed);
-                continue;
-            }
-        }
-        g_port_state[port].store(0, std::memory_order_relaxed);
+        const int idx = res.port_pad[port];
+        g_port_state[port].store(idx >= 0 ? sample_pad(g_pads[idx].gc, cfg->ports[port].bindings) : 0,
+                                 std::memory_order_relaxed);
     }
+    const std::array<bool, 16>& claimed = res.claimed;
 
     // Auto pad: the first unclaimed controller, folded into a keyboard-driven port 0 with the Default
     // Gamepad map (matches the old "plug in a pad, it drives player 1 alongside the keyboard").
@@ -235,14 +285,11 @@ void flush_rumble() {
     static std::array<bool, 16> last_on{};
     std::array<bool, 16> want{};
     std::array<bool, 16> touched{};
+    const PadResolution res = resolve_pads(*cfg);
     for (int port = 0; port < 4; port++) {
         const PortConfig& pc = cfg->ports[port];
         if (!(pc.connected && pc.device.type == DeviceType::Gamepad && pc.pak == PakType::RumblePak)) continue;
-        // find the pad (no claim tracking needed here; a pad on multiple ports is degenerate)
-        int idx = -1;
-        for (int i = 0; i < (int)g_pads.size() && i < 16; i++) {
-            if (g_pads[i].guid == pc.device.guid) { idx = i; break; }
-        }
+        const int idx = res.port_pad[port];   // same routing the sampler uses (uid-exact, GUID fallback)
         if (idx < 0) continue;
         touched[idx] = true;
         if (g_rumble_want[port].load(std::memory_order_relaxed)) want[idx] = true;

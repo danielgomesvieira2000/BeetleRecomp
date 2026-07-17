@@ -124,6 +124,21 @@
         }
         .bind-row.listening .bind-value { border-color: #f2c14e; color: #f2c14e; background-color: #34301f; }
 
+        #autoconfig {
+            display: block;
+            width: 280dp;
+            margin-bottom: 14dp;
+            padding: 8dp;
+            text-align: center;
+            background-color: #2a2a30;
+            border: 1dp #45454d;
+            border-radius: 8dp;
+            color: #f0f0f0;
+            tab-index: auto;
+            nav: auto;
+        }
+        #autoconfig:hover, #autoconfig:focus { border-color: #f2c14e; background-color: #2f2f37; }
+
         #back {
             display: block;
             width: 160dp;
@@ -143,6 +158,7 @@
     <div id="controls_root">
         <h1>Controls</h1>
         <p class="hint">A device drives at most one port. Click a bind row, then press a key or button to set it. Esc cancels.</p>
+        <div id="autoconfig" data-role="autoconfig">Auto-configure controllers</div>
         <div id="ports_scroll">
             <!-- Four port cards. Device / Profile option lists and the bind rows are filled by C++
                  (populate_controls); the Pak options are static. -->

@@ -28,9 +28,10 @@ namespace bar_ui {
 
 // A connected controller as surfaced to the Controls dialog's device dropdown. main() (which owns the
 // SDL controller handles) publishes the current list via publish_gamepads(); the render thread reads a
-// mutex-protected copy when repopulating the dialog. Only copied name/guid strings cross the thread
-// boundary — never an SDL_GameController* handle.
-struct UiGamepad { std::string guid; std::string name; };
+// mutex-protected copy when repopulating the dialog. Only copied strings cross the thread boundary —
+// never an SDL_GameController* handle. `uid` is bar_input's stable per-physical-device id; `name` is
+// the display label (already " (n)"-suffixed for identically-named pads).
+struct UiGamepad { std::string guid; std::string uid; std::string name; };
 void publish_gamepads(const std::vector<UiGamepad>& list);
 
 // True while the Controls dialog is waiting for the user to press a key/button to (re)assign a bind.

@@ -183,7 +183,7 @@ static void bar_user_message(uint32_t sdl_flags, const char* msg);
 static void bar_publish_devices() {
     std::vector<bar_ui::UiGamepad> list;
     for (const auto& d : bar::input::enumerate_devices()) {
-        list.push_back(bar_ui::UiGamepad{ d.guid, d.name });
+        list.push_back(bar_ui::UiGamepad{ d.guid, d.uid, d.display });
     }
     bar_ui::publish_gamepads(list);
 }
@@ -776,7 +776,7 @@ int main(int argc, char** argv) {
             if (!guid.empty()) {
                 using namespace bar::input_config;
                 cfg.ports[0].connected    = true;
-                cfg.ports[0].device       = DeviceRef{ DeviceType::Gamepad, guid, name };
+                cfg.ports[0].device       = DeviceRef{ DeviceType::Gamepad, guid, name, {} };
                 cfg.ports[0].profile_name = "Default Gamepad";
                 if (const BindingProfile* pr = find_profile(cfg, "Default Gamepad")) cfg.ports[0].bindings = pr->bindings;
                 set(cfg);   // persist the controller default so it sticks

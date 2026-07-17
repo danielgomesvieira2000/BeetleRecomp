@@ -69,13 +69,18 @@ struct Bindings {
     std::array<Bind, (size_t)N64Input::Count> map{};
 };
 
-// Which physical device drives a port. A gamepad is identified by its SDL joystick GUID string
-// (stable across replug of the same physical device); display_name is a snapshot for the dropdown.
+// Which physical device drives a port. A gamepad is identified primarily by `uid` — a per-physical-
+// device stable id built by bar_input as "<guid>!<serial>" when SDL exposes a serial number, else
+// "<guid>!#<n>" (n = 1-based ordinal among connected same-GUID pads). The plain SDL joystick GUID
+// alone is NOT unique: it encodes bus/vendor/product only, so two identical controllers (or any two
+// XInput pads) collide. `guid` is kept for matching configs written before uid existed and as the
+// fallback when the exact uid isn't currently connected; display_name is a snapshot for the dropdown.
 enum class DeviceType : int { None, Keyboard, Gamepad };
 struct DeviceRef {
     DeviceType  type = DeviceType::None;
     std::string guid;           // SDL_JoystickGetGUIDString (empty for None/Keyboard)
     std::string display_name;   // SDL_GameControllerName snapshot (for the UI label)
+    std::string uid;            // stable unique device id from bar_input ("" in pre-uid configs)
 };
 
 // The accessory inserted into a port. Controller Pak = mempak save store (emulated in the SI stub);

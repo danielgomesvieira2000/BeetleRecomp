@@ -11,7 +11,9 @@
 #  endif
 #endif
 
+#include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -488,13 +490,23 @@ Rml::Element* find_class(Rml::Element* root, const char* cls) {
     return nullptr;
 }
 
-// The <select> value string encoding a port's assigned device.
+// The <select> value string encoding a port's assigned device. Gamepad options are keyed by uid (the
+// per-physical-device id) so two identical controllers get distinct dropdown values; a pre-uid config
+// falls back to the bare GUID (uid always starts with the GUID, so parsing is uniform).
 std::string device_value(const ic::DeviceRef& d) {
     switch (d.type) {
         case ic::DeviceType::Keyboard: return "keyboard";
-        case ic::DeviceType::Gamepad:  return "gpad:" + d.guid;
+        case ic::DeviceType::Gamepad:  return "gpad:" + (d.uid.empty() ? d.guid : d.uid);
         default: return "none";
     }
+}
+
+// Does a connected device match a port's saved assignment? Exact uid when the config has one;
+// GUID otherwise (pre-uid configs / serial-less pads whose ordinal changed). Mirrors bar_input's
+// resolve_pads so the dropdown shows the same pad the runtime actually routes.
+bool device_matches(const ic::DeviceRef& saved, const bar_ui::UiGamepad& d) {
+    if (saved.type != ic::DeviceType::Gamepad) return false;
+    return saved.uid.empty() ? (saved.guid == d.guid) : (saved.uid == d.uid);
 }
 
 // Parse a data-port attribute; returns -1 if missing/invalid.
@@ -538,17 +550,20 @@ void populate_controls() {
             sel->RemoveAll();
             sel->Add("None", "none");
             sel->Add("Keyboard", "keyboard");
-            bool found = (pc.device.type != ic::DeviceType::Gamepad);
+            // Options are keyed by uid; the selected value is the matching connected pad's option (so a
+            // pre-uid GUID-only assignment still highlights the pad it resolves to at runtime).
+            std::string sel_value = (pc.device.type == ic::DeviceType::Gamepad) ? std::string() : device_value(pc.device);
             for (const auto& d : devices) {
-                sel->Add(d.name, "gpad:" + d.guid);
-                if (pc.device.type == ic::DeviceType::Gamepad && pc.device.guid == d.guid) found = true;
+                sel->Add(d.name, "gpad:" + d.uid);
+                if (sel_value.empty() && device_matches(pc.device, d)) sel_value = "gpad:" + d.uid;
             }
-            if (!found) {   // saved gamepad not currently connected — keep the assignment visible
+            if (sel_value.empty()) {   // saved gamepad not currently connected — keep the assignment visible
                 const std::string label = (pc.device.display_name.empty() ? std::string("Controller")
                                                                            : pc.device.display_name) + " (disconnected)";
-                sel->Add(label, "gpad:" + pc.device.guid);
+                sel_value = device_value(pc.device);
+                sel->Add(label, sel_value);
             }
-            sel->SetValue(device_value(pc.device));
+            sel->SetValue(sel_value);
         }
 
         if (auto* sel = rmlui_dynamic_cast<Rml::ElementFormControl*>(find_role(card, "pak"))) {
@@ -650,6 +665,67 @@ bool handle_rebind_event(const SDL_Event& ev) {
     return true;
 }
 
+// ---- Auto-configure ----
+// USB vendor id from an SDL joystick GUID string (32 hex chars; bytes 4-5 hold the vendor,
+// little-endian, i.e. hex chars 8-11). 0 when unknown (e.g. some XInput-only enumerations).
+uint16_t vendor_from_guid(const std::string& g) {
+    auto hexval = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    if (g.size() < 12) return 0;
+    const int b4h = hexval(g[8]), b4l = hexval(g[9]), b5h = hexval(g[10]), b5l = hexval(g[11]);
+    if (b4h < 0 || b4l < 0 || b5h < 0 || b5l < 0) return 0;
+    return (uint16_t)((b4h * 16 + b4l) | ((b5h * 16 + b5l) << 8));
+}
+
+// Assign every connected controller to a port, best pads first: 8BitDo (vendor 0x2dc8 or name),
+// then Xbox (vendor 0x045e / Microsoft, or name), then everything else (any pad SDL maps to the
+// game-controller layout is Xbox-compatible). Ties keep connection order. The next free port gets
+// the keyboard so a keyboard player keeps a seat; remaining ports are unplugged. Each assigned pad
+// gets the Default Gamepad bindings; paks are left as the user set them.
+void autoconfigure_ports() {
+    std::vector<bar_ui::UiGamepad> devices;
+    { std::lock_guard<std::mutex> lk(g_devices_mutex); devices = g_devices; }
+
+    auto rank = [](const bar_ui::UiGamepad& d) -> int {
+        std::string n = d.name;
+        std::transform(n.begin(), n.end(), n.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+        const uint16_t vendor = vendor_from_guid(d.guid);
+        if (vendor == 0x2dc8 || n.find("8bitdo") != std::string::npos) return 0;
+        if (vendor == 0x045e || n.find("xbox") != std::string::npos || n.find("xinput") != std::string::npos) return 1;
+        return 2;
+    };
+    std::stable_sort(devices.begin(), devices.end(),
+                     [&](const bar_ui::UiGamepad& a, const bar_ui::UiGamepad& b) { return rank(a) < rank(b); });
+
+    ic::InputConfig cfg = ic::get();
+    const ic::BindingProfile* gp = ic::find_profile(cfg, "Default Gamepad");
+    const ic::BindingProfile* kp = ic::find_profile(cfg, "Default Keyboard");
+    int port = 0;
+    for (; port < 4 && port < (int)devices.size(); port++) {
+        ic::PortConfig& pc = cfg.ports[port];
+        pc.connected = true;
+        pc.device = ic::DeviceRef{ ic::DeviceType::Gamepad, devices[port].guid, devices[port].name, devices[port].uid };
+        if (gp != nullptr) { pc.bindings = gp->bindings; pc.profile_name = "Default Gamepad"; }
+    }
+    if (port < 4) {
+        ic::PortConfig& pc = cfg.ports[port];
+        pc.connected = true;
+        pc.device = ic::DeviceRef{ ic::DeviceType::Keyboard, {}, {}, {} };
+        if (kp != nullptr) { pc.bindings = kp->bindings; pc.profile_name = "Default Keyboard"; }
+        port++;
+    }
+    for (; port < 4; port++) {   // leftover ports: unplug, but keep their bindings/pak for later
+        cfg.ports[port].connected = false;
+        cfg.ports[port].device = ic::DeviceRef{};
+    }
+    apply_input_config(cfg);
+    g_controls_dirty.store(true);   // full dialog refresh, deferred to after the event drain
+}
+
 void show_controls() {
     hide_all_docs();
     if (g_controls_doc) {
@@ -690,19 +766,30 @@ void wire_controls_events() {
                 dev.type = ic::DeviceType::Keyboard;
             } else if (value.rfind("gpad:", 0) == 0) {
                 dev.type = ic::DeviceType::Gamepad;
-                dev.guid = value.substr(5);
+                // The option value is the uid ("<guid>!<suffix>") — or a bare GUID for a pre-uid
+                // "(disconnected)" entry. The guid is always the prefix up to '!'.
+                const std::string key = value.substr(5);
+                const size_t bang = key.find('!');
+                dev.guid = (bang == std::string::npos) ? key : key.substr(0, bang);
+                dev.uid  = (bang == std::string::npos) ? std::string() : key;
                 std::lock_guard<std::mutex> lk(g_devices_mutex);
-                for (const auto& d : g_devices) if (d.guid == dev.guid) { dev.display_name = d.name; break; }
+                for (const auto& d : g_devices) {
+                    if (dev.uid.empty() ? (d.guid == dev.guid) : (d.uid == dev.uid)) { dev.display_name = d.name; break; }
+                }
             } else {
                 dev.type = ic::DeviceType::None;
             }
-            // One physical device per port: steal it from any other port that had it.
+            // One physical device per port: steal it from any other port that had it. Gamepads compare
+            // by uid when both sides have one, so two identical pads (same GUID) no longer evict each
+            // other; GUID compare only remains for pre-uid saved assignments (ambiguous anyway).
             if (dev.type != ic::DeviceType::None) {
                 for (int q = 0; q < 4; q++) {
                     if (q == port) continue;
                     ic::DeviceRef& od = cfg.ports[q].device;
                     const bool same = (od.type == dev.type) &&
-                                      (dev.type == ic::DeviceType::Keyboard || od.guid == dev.guid);
+                                      (dev.type == ic::DeviceType::Keyboard ||
+                                       ((od.uid.empty() || dev.uid.empty()) ? od.guid == dev.guid
+                                                                            : od.uid == dev.uid));
                     if (same) { od = ic::DeviceRef{}; full_repopulate = true; }
                 }
             }
@@ -762,6 +849,7 @@ void wire_controls_events() {
         while (rel != nullptr && rel->GetAttribute<Rml::String>("data-role", Rml::String()).empty()) rel = rel->GetParentNode();
         if (rel == nullptr) return;
         const Rml::String role = rel->GetAttribute<Rml::String>("data-role", Rml::String());
+        if (role == "autoconfig") { autoconfigure_ports(); return; }   // port-less header button
         const int port = attr_port(rel);
         if (port < 0) return;
 
