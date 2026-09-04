@@ -288,7 +288,11 @@ void flush_rumble() {
     const PadResolution res = resolve_pads(*cfg);
     for (int port = 0; port < 4; port++) {
         const PortConfig& pc = cfg->ports[port];
-        if (!(pc.connected && pc.device.type == DeviceType::Gamepad && pc.pak == PakType::RumblePak)) continue;
+        // Any connected gamepad may rumble, regardless of which pak the port is configured with.
+        // The SI layer serves the Controller Pak data area and the rumble motor register from the
+        // same transaction stream (see bar_handle_pak), so a port presents both accessories at once
+        // and the player never has to swap. A pad that cannot rumble is simply a no-op below.
+        if (!(pc.connected && pc.device.type == DeviceType::Gamepad && pc.pak != PakType::None)) continue;
         const int idx = res.port_pad[port];   // same routing the sampler uses (uid-exact, GUID fallback)
         if (idx < 0) continue;
         touched[idx] = true;

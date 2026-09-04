@@ -142,22 +142,36 @@ static void bar_handle_pak(uint8_t* rdram, int64_t fb, int port, unsigned cmd) {
         for (int i = 0; i < 32; i++) data[i] = 0;                            // default read response
     }
 
-    if (pak == bar::input_config::PakType::RumblePak) {
-        if (block == kBlockDetect) {
-            if (!is_write) { for (int i = 0; i < 32; i++) data[i] = 0x80; }   // rumble-pak identify
-        } else if (block == kBlockRumble) {
-            if (is_write) bar::input::set_rumble(port, data[0] != 0);         // 0x01.. = motor on, 0x00 = off
+    // Serve BOTH accessories from the same transaction stream, rather than branching on the
+    // configured pak type. On real hardware the slot holds one accessory and BAR even prompts the
+    // player to swap ("Please remove the Rumble Pak and insert the Controller Pak"), but the two do
+    // not actually collide in the address space:
+    //
+    //   block <  0x400 (addr < 0x8000)  Controller Pak data   -> 32 KiB per-port save store
+    //   block == 0x400 (addr   0x8000)  bank-select / identify -> RAM echo, which satisfies BOTH
+    //                                    (BAR writes a bank number and reads it back; a Rumble Pak
+    //                                     identify writes 0x80 and reads 0x80 back)
+    //   block == 0x600 (addr   0xC000)  rumble motor on/off    -> host rumble
+    //
+    // So a single port can present a working Controller Pak and a working Rumble Pak at once, with
+    // no manual switching. Deliberate deviation from hardware; the identify semantics are left
+    // exactly as the save path already proved, so this changes policy only.
+    if (block == kBlockDetect) {
+        if (is_write) std::memcpy(g_detect_cell[port], data, 32);
+        else          std::memcpy(data, g_detect_cell[port], 32);
+    } else if (block < kBlockDetect) {
+        if (is_write) bar::input::mempak_write(port, block, data);
+        else          bar::input::mempak_read(port, block, data);
+    } else if (block == kBlockRumble) {
+        if (is_write) {
+            bar::input::set_rumble(port, data[0] != 0);
+            if (bar_dbg_pak())
+                std::fprintf(stderr, "[BAR_DBG_PAK] *** RUMBLE motor write port=%d value=0x%02X ***\n",
+                             port, data[0]);
         }
-    } else if (pak == bar::input_config::PakType::ControllerPak) {
-        if (block == kBlockDetect) {
-            if (is_write) std::memcpy(g_detect_cell[port], data, 32);         // bank-select / detect echo
-            else          std::memcpy(data, g_detect_cell[port], 32);
-        } else if (block < kBlockDetect) {
-            if (is_write) bar::input::mempak_write(port, block, data);        // 32 KiB save store
-            else          bar::input::mempak_read(port, block, data);
-        }
-        // blocks between the pak data area and the accessory region: leave zero (out of range).
     }
+    // Blocks between the data area and the accessory region are out of range: leave zero.
+    (void)pak;
 
     if (bar_dbg_pak()) {
         std::fprintf(stderr, "[BAR_DBG_PAK] %s port=%d addr=0x%04X block=0x%X pak=%d data[0..3]=%02X%02X%02X%02X\n",
