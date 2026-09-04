@@ -6,6 +6,7 @@
 #include "recompui/program_config.h"
 #include "recompui/renderer.h"
 #include "recompui/config.h"
+#include "recompinput/input_events.h"
 
 namespace {
 
@@ -82,21 +83,10 @@ void bar::frontend::install() {
     trace("install: done");
 }
 
-void bar::frontend::queue_sdl_event(const SDL_Event& event) {
-    // TEMPORARY (BAR_DBG_UI=1): confirm input actually reaches the frontend. Only key and controller
-    // button presses are logged, so the per-frame mouse-motion flood does not drown the trace.
-    if (std::getenv("BAR_DBG_UI") != nullptr) {
-        if (event.type == SDL_KEYDOWN) {
-            std::fprintf(stderr, "[frontend] -> KEYDOWN scancode=%d capturing=%d\n",
-                         (int)event.key.keysym.scancode, (int)recompui::is_context_capturing_input());
-            std::fflush(stderr);
-        } else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
-            std::fprintf(stderr, "[frontend] -> PAD button=%d capturing=%d\n",
-                         (int)event.cbutton.button, (int)recompui::is_context_capturing_input());
-            std::fflush(stderr);
-        }
-    }
-    recompui::queue_event(event);
+void bar::frontend::pump_events() {
+    // recompinput owns the SDL pump: it polls, filters, forwards to recompui, and applies cursor
+    // visibility / relative-mouse mode from recompui's flag (recompui itself never calls SDL).
+    recompinput::handle_events();
 }
 
 bool bar::frontend::menu_capturing_input() {

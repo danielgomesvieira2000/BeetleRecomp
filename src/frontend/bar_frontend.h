@@ -16,10 +16,15 @@ union SDL_Event;
 
 namespace bar::frontend {
 
-// Hand an SDL event to the frontend. recompui + recompinput own ALL menu interaction — keyboard,
-// mouse, controller navigation and binding capture — so events are forwarded wholesale rather than
-// translated here, unlike the legacy src/ui path which synthesised key events from pad buttons.
-void queue_sdl_event(const SDL_Event& event);
+// Pump SDL events through the frontend. This REPLACES the host's own SDL_PollEvent loop rather
+// than supplementing it: recompinput::handle_events() polls SDL itself, and two pumps would race
+// for the same queue and silently drop each other's events.
+//
+// Doing it this way is what makes the mouse work. Besides routing events to recompui, that function
+// applies SDL_ShowCursor and SDL_SetRelativeMouseMode from recompui's cursor state — recompui only
+// records a flag and never touches SDL — and also handles Alt+Enter/F11 fullscreen, controller
+// binding capture, controller hotplug, file drops, player assignment and quit.
+void pump_events();
 
 // True while a menu actually owns input. Game input must be frozen for exactly this window and no
 // longer: the legacy UI froze input whenever its overlay existed, which is why the keyboard did

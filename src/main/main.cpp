@@ -206,6 +206,14 @@ static void bar_publish_devices() {
 
 static ultramodern::gfx_callbacks_t::gfx_data_t create_gfx() {
     SDL_SetMainReady();
+    // Windows DPI awareness. SDL_WINDOW_ALLOW_HIGHDPI alone is not enough here: unless the PROCESS is
+    // marked DPI-aware before SDL_Init, Windows hands a scaled desktop to the app and lies about
+    // sizes. On a 1920x1080 display at 125% that means SDL sees 1536x864, so the renderer draws at
+    // physical resolution while the window is measured in logical pixels — the UI overflows the
+    // window (its title clips) and, worse, mouse coordinates land about 1.25x off, so clicking a
+    // menu entry activates a different one. Both hints must be set before SDL_Init to take effect.
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "1");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
         std::fprintf(stderr, "[BeetleRecomp] SDL_Init failed: %s\n", SDL_GetError());
     }
@@ -282,19 +290,19 @@ static ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callba
 }
 
 static void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t /*data*/) {
+#ifdef BEETLE_ENABLE_FRONTEND
+    // recompinput owns the SDL pump in frontend builds -- see bar::frontend::pump_events. It must be
+    // the ONLY poller: running the loop below as well would race it for the same SDL queue and each
+    // would silently swallow events the other needed, which is why menu navigation and the mouse
+    // only work once this fully replaces it rather than supplementing it.
+    bar::frontend::pump_events();
+#else
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
         if (event.type == SDL_QUIT) {
             ultramodern::quit();
             continue;
         }
-#ifdef BEETLE_ENABLE_FRONTEND
-        // Give the frontend every event, including controller hotplug, before anything below
-        // consumes it — recompui/recompinput drive menu navigation and binding capture themselves.
-        // The game-side handlers below still run, because bar::input tracks pads for the N64 ports
-        // independently of which device is steering the menu.
-        bar::frontend::queue_sdl_event(event);
-#endif
         // Game controller hotplug. SDL queues a DEVICEADDED for controllers already present at init,
         // so this also picks up controllers plugged in before launch. bar::input tracks all of them
         // (up to 4 ports can be driven); the Controls dialog assigns which pad drives which port.
@@ -363,6 +371,11 @@ static void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t /*data*/) {
         }
 #endif
     }
+#endif // BEETLE_ENABLE_FRONTEND
+
+    // Shared by BOTH builds: the game's own per-frame input work. The frontend replaces the event
+    // PUMP, not the N64-port input path -- and mempak_flush_all in particular must keep running, or
+    // Controller Pak saves would never reach disk.
     bar::input::sample_all_ports();   // refresh every assigned pad's snapshot on this (main) thread
     bar::input::flush_rumble();       // issue SDL rumble for any port that wants it (main thread)
     bar::input::mempak_flush_all();   // persist any Controller Pak writes (cheap no-op when clean)
