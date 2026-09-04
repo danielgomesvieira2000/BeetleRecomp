@@ -36,6 +36,14 @@ void trace(const char* msg) {
 } // namespace
 
 void bar::frontend::install() {
+    // BAR_DBG_UI=1 sends the frontend's diagnostics to bar_ui_trace.log in the working directory.
+    // Worth keeping: this build links as /SUBSYSTEM:WINDOWS, so it has no console and shell
+    // redirection of stderr captures nothing — without this, frontend problems are silent.
+    if (std::getenv("BAR_DBG_UI") != nullptr) {
+        static std::FILE* log = std::freopen("bar_ui_trace.log", "w", stderr);
+        (void)log;
+    }
+
     trace("install: begin");
 
     recompui::programconfig::set_program_name(kDisplayName);

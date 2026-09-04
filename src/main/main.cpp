@@ -213,7 +213,12 @@ static ultramodern::gfx_callbacks_t::gfx_data_t create_gfx() {
     // window (its title clips) and, worse, mouse coordinates land about 1.25x off, so clicking a
     // menu entry activates a different one. Both hints must be set before SDL_Init to take effect.
     SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
-    SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "1");
+    // DPI_SCALING is deliberately OFF. With it on, SDL reports window geometry and mouse positions
+    // in DPI-scaled logical units while the drawable — and therefore everything RT64 and recompui
+    // lay out — stays in physical pixels. At 125% that is a 1.25x disagreement between where the UI
+    // draws a button and where a click is reported, which shows up as having to click well away
+    // from a menu entry to hit it. Awareness alone keeps both sides in physical pixels.
+    SDL_SetHint(SDL_HINT_WINDOWS_DPI_SCALING, "0");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER | SDL_INIT_AUDIO) != 0) {
         std::fprintf(stderr, "[BeetleRecomp] SDL_Init failed: %s\n", SDL_GetError());
     }
