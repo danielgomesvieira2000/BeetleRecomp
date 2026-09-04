@@ -291,10 +291,9 @@ static ultramodern::renderer::WindowHandle create_window(ultramodern::gfx_callba
 
 static void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t /*data*/) {
 #ifdef BEETLE_ENABLE_FRONTEND
-    // recompinput owns the SDL pump in frontend builds -- see bar::frontend::pump_events. It must be
-    // the ONLY poller: running the loop below as well would race it for the same SDL queue and each
-    // would silently swallow events the other needed, which is why menu navigation and the mouse
-    // only work once this fully replaces it rather than supplementing it.
+    // recompinput owns the SDL queue and must be its ONLY poller -- a second loop would race it and
+    // each would swallow events the other needed. It is pumped here rather than from input_poll
+    // because this callback runs even with no game started, which is where the launcher lives.
     bar::frontend::pump_events();
 #else
     SDL_Event event;
@@ -496,6 +495,11 @@ static void set_frequency(uint32_t freq) {
 // the port's assigned device (keyboard or a specific SDL pad) through its rebindable bindings. The
 // Controls dialog (src/ui) edits that config.
 static void input_poll() {
+    // Deliberately empty. wave-race-64-recomp pumps recompinput from here, but ultramodern does not
+    // call this callback until a game is running — and this port sits at the launcher with no game
+    // started, because recompui's "Start Game" owns that. Pumping only from here left nothing
+    // draining SDL's queue at the launcher, so the window stopped answering Windows and went
+    // "Not Responding". The pump therefore lives in update_gfx, which does run pre-game.
 }
 
 // bar_poll_keyboard (defined below) is the single input source — BAR_AUTOPLAY script or live
