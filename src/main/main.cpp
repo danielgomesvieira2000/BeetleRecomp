@@ -38,6 +38,9 @@
 #include "game/input_config.hpp"              // bar::input_config — 4-port controller settings (input.json)
 #include "main/bar_cheats.h"                  // bar_cheats — BAR cheat toggles (host-side RDRAM pokes)
 #include "main/bar_input.hpp"                 // bar::input — live 4-port runtime input path
+#ifdef BEETLE_ENABLE_FRONTEND
+#include "frontend/bar_frontend.h"            // bar::frontend — RecompFrontend launcher/menus + input
+#endif
 
 #ifdef BEETLE_ENABLE_UI
 #include "ui/bar_ui.h"                        // bar_ui — RmlUi launcher + settings + cheats menu (Tier 2)
@@ -133,10 +136,17 @@ static const std::string version_string = "0.1.0";   // TODO(BAR): real version 
 //   validated z64 and paste it here (easiest: log XXH3_64bits() once during bring-up).
 static constexpr uint64_t BAR_USA_ROM_XXH3 = 0x56cfec69d7951f9fULL;   // XXH3_64 of the USA z64 (sha1 e5ab4d22…)
 
-static std::vector<recomp::GameEntry> supported_games = {
+// NOT static: recompui's launcher declares `extern std::vector<recomp::GameEntry> supported_games;`
+// (recompui/src/base/ui_launcher.cpp) and links against the consuming project's definition — another
+// of RecompFrontend's implicit project contracts, alongside patches/ui_funcs.h. It reads this table
+// to decide what the launcher can offer and whether a valid ROM is present.
+std::vector<recomp::GameEntry> supported_games = {
     recomp::GameEntry{
         .rom_hash              = BAR_USA_ROM_XXH3,            // TODO(BAR)
         .internal_name         = "Beetle Adventure Rac",      // exact 20 bytes at ROM offset 0x20
+        // Required since the upstream runtime merge: register_game() hard-exits with "Game display
+        // name was not set." if this is empty. It is also what recompui shows in the launcher.
+        .display_name          = "Beetle Adventure Racing!",
         .game_id               = u8"bar.n64.us",             // stable id (arbitrary but fixed)
         .mod_game_id           = "bar",
         .save_type             = recomp::SaveType::None,      // BAR uses the Controller Pak (mempak), which
@@ -166,7 +176,12 @@ extern std::atomic<bool> g_bar_renderer_ready;   // RT64 finished setup
 extern std::atomic<bool> g_bar_vi_ticked;        // renderer presented a frame (VI thread seeded a mode)
 
 // SDL window / gfx (gfx_callbacks_t). RT64 attaches to this window (its native HWND on Windows).
-static SDL_Window* g_window = nullptr;
+// recompui (recompui/src/base/ui_state.cpp) declares `extern SDL_Window* window;` and links against
+// the consuming project's definition, so the window handle must be a non-static global with exactly
+// that name. g_window stays as a reference alias so the existing call sites read unchanged and the
+// two can never drift apart.
+SDL_Window* window = nullptr;
+static SDL_Window*& g_window = window;
 
 // Defined further down (with the first-run ROM helpers): pops a player-facing dialog (SDL message box,
 // works with no window) and logs the same text. Forward-declared here so the window/renderer setup paths
@@ -874,7 +889,9 @@ int main(int argc, char** argv) {
         // launcher stays shown over the (booting) game until the user clicks Play (which hides it);
         // F1 reopens the menu in-game. BAR_SKIP_LAUNCHER starts with the overlay hidden (headless).
 
-        recomp::start_game(game_id);
+        // Upstream added game modes: start_game now takes a mode id alongside the game id. BAR has
+        // no alternate modes, so it starts in the default (empty) mode.
+        recomp::start_game(game_id, "");
 #ifdef BEETLE_ENABLE_UI
         bar_ui::on_game_started();   // mark game started (enables F1); the launcher stays as an overlay
 #endif
@@ -885,7 +902,15 @@ int main(int argc, char** argv) {
     rsp_callbacks.get_rsp_microcode = get_rsp_microcode;
 
     ultramodern::renderer::callbacks_t renderer_callbacks{};   // MANDATORY
+#ifdef BEETLE_ENABLE_FRONTEND
+    // recompui draws its menus over the game, so it supplies its own RT64 context; use that instead
+    // of src/main/rt64_render_context.cpp. bar::frontend::create_render_context adapts the runtime's
+    // 3-argument callback to recompui's 4-argument factory, and pins Console presentation so the
+    // main-menu film-roll (a VI-origin pan that never redraws) still animates.
+    renderer_callbacks.create_render_context = bar::frontend::create_render_context;
+#else
     renderer_callbacks.create_render_context = bar_create_rt64_render_context;
+#endif
 
     ultramodern::gfx_callbacks_t gfx_callbacks{};
     gfx_callbacks.create_gfx    = create_gfx;
@@ -934,6 +959,13 @@ int main(int argc, char** argv) {
     extern void bar_start_preempt_timer();
     extern void bar_stop_preempt_timer();
     bar_start_preempt_timer();
+
+#ifdef BEETLE_ENABLE_FRONTEND
+    // Program identity, primary font and the launcher layout. Must precede recomp::start(), which
+    // brings up the renderer — recompui builds its menus during that bring-up, and throws if no
+    // primary font has been registered by then.
+    bar::frontend::install();
+#endif
 
     // Blocks until the game exits.
     recomp::start(config);

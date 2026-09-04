@@ -174,6 +174,10 @@ public:
                        const ultramodern::renderer::GraphicsConfig& new_config) override;
     void enable_instant_present() override;
     void send_dl(const OSTask* task) override;
+    // Added as a pure virtual by an upstream N64ModernRuntime change: the runtime asks the renderer
+    // to emit a minimal RDP workload targeting a framebuffer address, so a game that has not yet
+    // submitted a display list still produces something presentable.
+    void send_dummy_workload(uint32_t fb_address) override;
     void update_screen() override;
     void shutdown() override;
     uint32_t get_display_framerate() const override;
@@ -309,6 +313,19 @@ void RT64Context::shutdown() {
     if (app != nullptr) {
         app->end();
     }
+}
+
+void RT64Context::send_dummy_workload(uint32_t fb_address) {
+    // Mirrors recompui's RT64Context: a fill of the whole 320x240 framebuffer through the RDP, so
+    // the VI has real content to present before the game submits its first display list.
+    app->state->listProcessBegin();
+    app->state->rdp->setColorImage(G_IM_FMT_RGBA, G_IM_SIZ_16b, 320, fb_address);
+    // G_AD_DISABLE | G_CD_MAGICSQ | G_CK_NONE | G_TC_FILT | G_TF_BILERP | G_TT_NONE | G_TL_TILE |
+    // G_TD_CLAMP | G_TP_PERSP | G_CYC_FILL | G_PM_NPRIMITIVE, then G_AC_NONE | G_ZS_PIXEL | G_RM_NOOP.
+    app->state->rdp->setOtherMode(0x382C30, 0);
+    app->state->rdp->fillRect(0, 0, 320 << 2, 240 << 2);
+    app->state->fullSync();
+    app->state->listProcessEnd();
 }
 
 bool RT64Context::update_config(const ultramodern::renderer::GraphicsConfig& old_config,

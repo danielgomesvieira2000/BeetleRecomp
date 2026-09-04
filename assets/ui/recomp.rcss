@@ -1,0 +1,20 @@
+/* BeetleRecomp theme for RecompFrontend.
+ *
+ * recompui loads this as <exe dir>/assets/recomp.rcss (recompui::file::get_asset_path). It layers on
+ * top of the base stylesheet recompui generates in code (recompui/src/data/base_rcss.cpp), which
+ * already sets the document font-family from the font registered via register_primary_font — so this
+ * file is for project theming, not for bootstrapping the UI.
+ *
+ * Keep the family name in sync with kPrimaryFontFamily in src/frontend/bar_frontend.cpp.
+ */
+
+body {
+    font-family: "Lato";
+    color: #f2f2f2;
+}
+
+/* Beetle Adventure Racing's own palette: the menus are built around a saturated racing yellow on
+ * near-black, so the launcher picks up the game's identity rather than a generic dark theme. */
+.launcher-title {
+    color: #f2b01e;
+}

@@ -291,8 +291,24 @@ target_link_libraries(BeetleRecomp PRIVATE
 
 # ---- RecompFrontend launcher/menus + input ----
 if (BEETLE_ENABLE_FRONTEND)
+    target_sources(BeetleRecomp PRIVATE ${CMAKE_SOURCE_DIR}/src/frontend/bar_frontend.cpp)
     target_link_libraries(BeetleRecomp PRIVATE recompui recompinput)
     target_compile_definitions(BeetleRecomp PRIVATE BEETLE_ENABLE_FRONTEND)
+    # recompui.h pulls SDL.h and RmlUi headers; RmlUi arrives transitively via recompui's PUBLIC
+    # link, but SDL2 comes from our own FetchContent above.
+    if (WIN32)
+        target_include_directories(BeetleRecomp PRIVATE ${sdl2_SOURCE_DIR}/include)
+    endif()
+
+    # Ship the UI assets recompui resolves as <exe dir>/assets/<name>: the REQUIRED primary font and
+    # the project stylesheet. Without them recompui throws at menu-creation time.
+    add_custom_command(TARGET BeetleRecomp POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:BeetleRecomp>/assets"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_SOURCE_DIR}/assets/ui/recomp.rcss"
+                "${CMAKE_SOURCE_DIR}/assets/ui/LatoLatin-Regular.ttf"
+                "$<TARGET_FILE_DIR:BeetleRecomp>/assets"
+        COMMENT "Staging RecompFrontend assets (stylesheet + primary font)")
 endif()
 # ---------------------------------------------------------------------------
 # Tier-2 settings/launcher menu (src/ui) — RmlUi rendered through RT64.
