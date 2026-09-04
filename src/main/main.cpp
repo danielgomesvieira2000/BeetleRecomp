@@ -493,7 +493,18 @@ static ultramodern::input::connected_device_info_t input_get_device_info(int con
     // A Rumble Pak is surfaced to the high-level path so ultramodern's osMotorInit succeeds; a
     // Controller Pak is emulated at the SI/joybus level (status bit + mempak), so it reports no
     // high-level pak here (we don't want the runtime treating it as a rumble device).
-    const Pak pak = (bar::input::port_pak(controller_num) == bar::input_config::PakType::RumblePak)
+    // Report ANY configured pak as present. Controller Pak support needs BOTH halves and neither
+    // works alone (verified by reverting each):
+    //   1. here — ultramodern sets OSContStatus.status = (connected_pak != Pak::None), and BAR gates
+    //      its whole pak path on that status. With None it never even issues an SI pak query.
+    //   2. os_unimpl_stubs.cpp — answers the SHORT-format status query and serves READ_PAK/WRITE_PAK
+    //      against the 32 KiB per-port store, which is where the notes actually live.
+    //
+    // KNOWN WART: ultramodern's Pak enum has ControllerPak commented out, so a Controller Pak has to
+    // be reported as RumblePak just to make status non-zero. Real rumble output is separately gated
+    // on the CONFIGURED pak (bar_input.cpp), so nothing spuriously rumbles — but the proper fix is to
+    // add Pak::ControllerPak to the ultramodern fork and map it here.
+    const Pak pak = (bar::input::port_pak(controller_num) != bar::input_config::PakType::None)
                     ? Pak::RumblePak : Pak::None;
     return connected_device_info_t{ Device::Controller, pak };
 }

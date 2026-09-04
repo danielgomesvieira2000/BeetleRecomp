@@ -117,6 +117,14 @@ uint8_t pak_data_crc(const uint8_t* data) {
 // Per-port RAM-echo cell for a Controller Pak's accessory-detect / bank-select region (block 0x400):
 // __osPfsSelectBank writes the bank byte here and reads it back, and the mempak detect is RAM-like.
 uint8_t g_detect_cell[4][32] = {};
+
+// TEMPORARY (BAR_DBG_PAK=1): trace Controller Pak detection. The game reports "No Controller Pak
+// present" even with a pak configured, so log every SI frame's command triple plus each pak
+// transaction, to find where osPfsInit's probe diverges from what we answer. Remove once fixed.
+bool bar_dbg_pak() {
+    static const bool on = std::getenv("BAR_DBG_PAK") != nullptr;
+    return on;
+}
 }
 
 // Handle a single READ_PAK/WRITE_PAK block for `port` at PIF format base `fb` (sign-extended). Uses the
@@ -149,6 +157,12 @@ static void bar_handle_pak(uint8_t* rdram, int64_t fb, int port, unsigned cmd) {
             else          bar::input::mempak_read(port, block, data);
         }
         // blocks between the pak data area and the accessory region: leave zero (out of range).
+    }
+
+    if (bar_dbg_pak()) {
+        std::fprintf(stderr, "[BAR_DBG_PAK] %s port=%d addr=0x%04X block=0x%X pak=%d data[0..3]=%02X%02X%02X%02X\n",
+                     is_write ? "WRITE" : "READ", port, addr, block, (int)pak,
+                     data[0], data[1], data[2], data[3]);
     }
 
     if (!is_write) {
@@ -184,6 +198,20 @@ extern "C" void __osSiRawStartDma_recomp(uint8_t* rdram, recomp_context* ctx) {
     // the real PIF RAM but a garbage high half) -> MEM_BU faults reading it. Only touch the buffer when
     // a1 is a sane RDRAM (KSEG0, 8 MiB) address; otherwise just post the SI event so we never AV.
     const bool valid_pifram = ((pifram - 0x80000000u) < 0x00800000u);
+
+    // TEMPORARY (BAR_DBG_PAK=1): dump every DISTINCT SI frame shape, both directions, before any
+    // classification. The pak-frame classifier below may simply be failing to recognise BAR's pak
+    // frames; this shows the raw truth. Deduped against the last logged signature so the per-frame
+    // button poll doesn't flood the log.
+    if (bar_dbg_pak() && valid_pifram) {
+        const int64_t pf = (int32_t)ctx->r5;
+        char sig[80]; int n = 0;
+        n += std::snprintf(sig + n, sizeof(sig) - n, "d%d:", (int)direction);
+        for (int k = 0; k < 24 && n < (int)sizeof(sig) - 3; k++)
+            n += std::snprintf(sig + n, sizeof(sig) - n, "%02X", (unsigned)MEM_BU(0, pf + k));
+        static std::string last;
+        if (last != sig) { last = sig; std::fprintf(stderr, "[BAR_DBG_SI] %s\n", sig); }
+    }
     // Drive the state machine for testing: BAR_FORCESTATE="frame:state frame:state ..." writes
     // gGameSettings->gameStateFlag (@0x08) once at each listed SI-frame; the game's main loop then
     // calls uvSetGameState(state). Lets us reach later screens / a race without the (unread) buttons.
@@ -240,6 +268,37 @@ extern "C" void __osSiRawStartDma_recomp(uint8_t* rdram, recomp_context* ctx) {
         // __OSContRamReadFormat block at offset `channel`. Identify it by the (cmd, txsize, rxsize)
         // triple + all-zero leading filler, then service the pak (mempak / rumble) and skip the button
         // loop (a pak transaction carries no button blocks).
+        // SHORT-format single command (libultra's __OSContRequesFormatShort / the pak request path):
+        // txsize@0, rxsize@1, cmd@2, payload@3 — i.e. NO leading dummy byte, unlike the 8-byte
+        // per-port button/status blocks handled below (dummy@0, txsize@1, rxsize@2, cmd@3).
+        //
+        // BAR issues its Controller Pak status query in this layout ("01 03 00 FF FF FF FE"). Reading
+        // cmd at offset 3 sees 0xFF, so the old code skipped it and left the 0xFF response placeholders
+        // untouched — the game then reports the pak unusable ("error creating game note"). Answer it
+        // here, and route short-format READ_PAK/WRITE_PAK through the same handler by passing a base
+        // one byte earlier, which realigns its dummy-relative offsets (addr@4,5 -> 3,4; data@6 -> 5).
+        {
+            const unsigned s_tx  = (unsigned)MEM_BU(0, pifram_se);
+            const unsigned s_rx  = (unsigned)MEM_BU(1, pifram_se);
+            const unsigned s_cmd = (unsigned)MEM_BU(2, pifram_se);
+            const bool has_pak = bar::input::port_pak(0) != bar::input_config::PakType::None;
+
+            if (s_cmd == 0 && s_tx == 0x01 && s_rx == 0x03 && bar::input::port_connected(0)) {
+                MEM_B(3, pifram_se) = 0x05;                              // typeh
+                MEM_B(4, pifram_se) = 0x00;                              // typel -> CONT_TYPE_NORMAL
+                MEM_B(5, pifram_se) = has_pak ? (int8_t)0x01 : (int8_t)0x00;   // CONT_CARD_ON
+                if (bar_dbg_pak()) std::fprintf(stderr, "[BAR_DBG_PAK] short STATUS -> pak=%d\n", (int)has_pak);
+                ultramodern::send_si_message();
+                return;
+            }
+            if (((s_cmd == 2 && s_tx == 0x03 && s_rx == 0x21) ||         // READ_PAK
+                 (s_cmd == 3 && s_tx == 0x23 && s_rx == 0x01)) && has_pak) {
+                bar_handle_pak(rdram, pifram_se - 1, 0, s_cmd);
+                ultramodern::send_si_message();
+                return;
+            }
+        }
+
         int pak_ch = -1; unsigned pak_cmd = 0;
         for (int ch = 0; ch < 4; ch++) {
             const int64_t fb = pifram_se + ch;
@@ -251,6 +310,20 @@ extern "C" void __osSiRawStartDma_recomp(uint8_t* rdram, recomp_context* ctx) {
                 for (int k = 0; k < ch; k++) if ((unsigned)MEM_BU(0, pifram_se + k) != 0x00) { filler_ok = false; break; }
                 if (filler_ok) { pak_ch = ch; pak_cmd = c; break; }
             }
+        }
+
+        if (bar_dbg_pak()) {
+            // Log the raw command triples for all four 8-byte slots plus the first bytes, so a pak
+            // frame we FAILED to classify still shows up here (that is the suspected failure mode).
+            std::fprintf(stderr, "[BAR_DBG_PAK] pak_ch=%d cmd=%u |", pak_ch, pak_cmd);
+            for (int ch = 0; ch < 4; ch++) {
+                const int64_t fb = pifram_se + (int64_t)(ch * 8);
+                std::fprintf(stderr, " [%d]tx=%02X rx=%02X c=%02X", ch,
+                             (unsigned)MEM_BU(1, fb), (unsigned)MEM_BU(2, fb), (unsigned)MEM_BU(3, fb));
+            }
+            std::fprintf(stderr, " | raw:");
+            for (int k = 0; k < 12; k++) std::fprintf(stderr, "%02X", (unsigned)MEM_BU(0, pifram_se + k));
+            std::fprintf(stderr, "\n");
         }
 
         if (pak_ch >= 0) {
