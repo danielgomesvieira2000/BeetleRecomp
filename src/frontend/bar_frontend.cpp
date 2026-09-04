@@ -82,6 +82,27 @@ void bar::frontend::install() {
     trace("install: done");
 }
 
+void bar::frontend::queue_sdl_event(const SDL_Event& event) {
+    // TEMPORARY (BAR_DBG_UI=1): confirm input actually reaches the frontend. Only key and controller
+    // button presses are logged, so the per-frame mouse-motion flood does not drown the trace.
+    if (std::getenv("BAR_DBG_UI") != nullptr) {
+        if (event.type == SDL_KEYDOWN) {
+            std::fprintf(stderr, "[frontend] -> KEYDOWN scancode=%d capturing=%d\n",
+                         (int)event.key.keysym.scancode, (int)recompui::is_context_capturing_input());
+            std::fflush(stderr);
+        } else if (event.type == SDL_CONTROLLERBUTTONDOWN) {
+            std::fprintf(stderr, "[frontend] -> PAD button=%d capturing=%d\n",
+                         (int)event.cbutton.button, (int)recompui::is_context_capturing_input());
+            std::fflush(stderr);
+        }
+    }
+    recompui::queue_event(event);
+}
+
+bool bar::frontend::menu_capturing_input() {
+    return recompui::is_context_capturing_input();
+}
+
 std::unique_ptr<ultramodern::renderer::RendererContext>
 bar::frontend::create_render_context(uint8_t* rdram,
                                      ultramodern::renderer::WindowHandle window_handle,

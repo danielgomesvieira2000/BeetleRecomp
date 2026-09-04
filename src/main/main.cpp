@@ -288,6 +288,13 @@ static void update_gfx(ultramodern::gfx_callbacks_t::gfx_data_t /*data*/) {
             ultramodern::quit();
             continue;
         }
+#ifdef BEETLE_ENABLE_FRONTEND
+        // Give the frontend every event, including controller hotplug, before anything below
+        // consumes it — recompui/recompinput drive menu navigation and binding capture themselves.
+        // The game-side handlers below still run, because bar::input tracks pads for the N64 ports
+        // independently of which device is steering the menu.
+        bar::frontend::queue_sdl_event(event);
+#endif
         // Game controller hotplug. SDL queues a DEVICEADDED for controllers already present at init,
         // so this also picks up controllers plugged in before launch. bar::input tracks all of them
         // (up to 4 ports can be driven); the Controls dialog assigns which pad drives which port.
@@ -667,6 +674,12 @@ extern "C" uint16_t bar_poll_keyboard(int port, int8_t* stick_x, int8_t* stick_y
     // navigation (arrows/enter) doesn't also drive the car.
     if (bar_ui::menu_capturing_input()) return 0;
 #endif
+#ifdef BEETLE_ENABLE_FRONTEND
+    // Same idea, but asked of recompui, which reports whether a context is ACTUALLY capturing input
+    // rather than merely being open. That distinction matters: the legacy check froze game input for
+    // as long as its overlay existed, so a normal launch reached the game with a dead keyboard.
+    if (bar::frontend::menu_capturing_input()) return 0;
+#endif
     // Only read the keyboard while our window actually holds input focus, so we don't drive the car
     // when the user has tabbed away. SDL tracks focus the same way on every platform.
     if (g_window != nullptr && !(SDL_GetWindowFlags(g_window) & SDL_WINDOW_INPUT_FOCUS)) return 0;
@@ -876,6 +889,17 @@ int main(int argc, char** argv) {
     // makes update_vi() deref a null mode — so we wait for g_bar_vi_ticked (renderer presented a
     // frame, which also means the launcher can draw over it). recomp::start() below blocks the main
     // thread, so this runs on a detached thread.
+#ifndef BEETLE_ENABLE_FRONTEND
+    // Auto-start, for builds WITHOUT the RecompFrontend launcher.
+    //
+    // Not used with the frontend, for two reasons. Correctness: recompui's
+    // add_start_game_or_load_rom_option() calls recomp::start_game() itself once librecomp reports a
+    // valid ROM (and runs the ROM picker when it does not), so the launcher owns that decision and
+    // auto-starting would race it. And safety: the wait below is on g_bar_vi_ticked, which is set by
+    // src/main/rt64_render_context.cpp -- the context the frontend REPLACES. Nothing would ever set
+    // it, so this fell through the full 5s timeout and started the game before the VI thread had
+    // ticked, which is exactly the null-mode deref the comment below warns about. That was a silent
+    // crash roughly nine seconds after launch.
     std::thread([game_id]() {
         using namespace std::chrono_literals;
         for (int i = 0; i < 500 && !g_bar_vi_ticked.load(); i++) {
@@ -896,6 +920,7 @@ int main(int argc, char** argv) {
         bar_ui::on_game_started();   // mark game started (enables F1); the launcher stays as an overlay
 #endif
     }).detach();
+#endif // !BEETLE_ENABLE_FRONTEND
 
     // ---- Assemble callbacks (field names verified against the vendored headers) ----
     recomp::rsp::callbacks_t rsp_callbacks{};                  // MANDATORY

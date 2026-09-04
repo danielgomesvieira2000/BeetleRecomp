@@ -10,7 +10,21 @@
 
 #include "ultramodern/renderer_context.hpp"
 
+// Forward-declared so main.cpp can hand events over without pulling in recompui.h, which drags in
+// SDL and the whole of RmlUi.
+union SDL_Event;
+
 namespace bar::frontend {
+
+// Hand an SDL event to the frontend. recompui + recompinput own ALL menu interaction — keyboard,
+// mouse, controller navigation and binding capture — so events are forwarded wholesale rather than
+// translated here, unlike the legacy src/ui path which synthesised key events from pad buttons.
+void queue_sdl_event(const SDL_Event& event);
+
+// True while a menu actually owns input. Game input must be frozen for exactly this window and no
+// longer: the legacy UI froze input whenever its overlay existed, which is why the keyboard did
+// nothing at all in normal (non-headless) launches.
+bool menu_capturing_input();
 
 // Register program identity, fonts and the launcher layout with recompui. Must be called BEFORE
 // recomp::start(), because recompui builds its menus during renderer bring-up.
