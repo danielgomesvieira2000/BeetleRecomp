@@ -302,13 +302,13 @@ if (BEETLE_ENABLE_FRONTEND)
 
     # Ship the UI assets recompui resolves as <exe dir>/assets/<name>: the REQUIRED primary font and
     # the project stylesheet. Without them recompui throws at menu-creation time.
+    # Copy the whole tree so icons/ (and anything added later) comes along: recompui resolves both
+    # "recomp.rcss" and "icons/X.svg" through the same <exe dir>/assets root.
     add_custom_command(TARGET BeetleRecomp POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:BeetleRecomp>/assets"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_SOURCE_DIR}/assets/ui/recomp.rcss"
-                "${CMAKE_SOURCE_DIR}/assets/ui/LatoLatin-Regular.ttf"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_SOURCE_DIR}/assets/ui"
                 "$<TARGET_FILE_DIR:BeetleRecomp>/assets"
-        COMMENT "Staging RecompFrontend assets (stylesheet + primary font)")
+        COMMENT "Staging RecompFrontend assets (stylesheet, primary font, icons)")
 endif()
 # ---------------------------------------------------------------------------
 # Tier-2 settings/launcher menu (src/ui) — RmlUi rendered through RT64.

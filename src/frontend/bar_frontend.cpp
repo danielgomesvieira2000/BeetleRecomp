@@ -5,6 +5,7 @@
 #include "recompui/recompui.h"
 #include "recompui/program_config.h"
 #include "recompui/renderer.h"
+#include "recompui/config.h"
 
 namespace {
 
@@ -58,6 +59,25 @@ void bar::frontend::install() {
 
         trace("launcher init callback: menu built");
     });
+
+    // Config tabs. recompui's create_menus() calls config::init_modal(), which throws
+    // "Configurations have not been loaded. Call recompui::config::finalize() first." unless the
+    // tabs exist and finalize() has run — so this must happen here, before recomp::start() brings
+    // the renderer up. Each tab persists to its own <id>.json in the app config directory.
+    //
+    // The prefab tabs cover everything the beta needs, so no bespoke options yet. Rumble strength is
+    // enabled because this port serves the rumble motor register alongside the Controller Pak, so a
+    // pad really can vibrate; gyro and mouse are off, since BAR has no use for either. The mods tab
+    // is deliberately omitted while mod support is out of scope.
+    recompui::config::create_general_tab(recompui::config::GeneralTabOptions{
+        .has_rumble_strength  = true,
+        .has_gyro_sensitivity = false,
+        .has_mouse_sensitivity = false,
+    });
+    recompui::config::create_graphics_tab();
+    recompui::config::create_sound_tab();
+    recompui::config::create_controls_tab();
+    recompui::config::finalize();
 
     trace("install: done");
 }
