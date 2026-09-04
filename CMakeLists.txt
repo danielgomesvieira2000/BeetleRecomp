@@ -2,7 +2,7 @@
 #
 # Adapted from Zelda64Recomp/Zelda64Recomp @ dev (CMakeLists.txt). Pinned deps in this repo:
 #   lib/N64ModernRuntime @ main (recomp::start(Configuration) — see src/main/main.cpp)
-#   lib/rt64 @ main, lib/RmlUi @ 6.1.x, lib/lunasvg @ 3.5.x, lib/N64Recomp @ mod-tool-release
+#   lib/rt64 @ main, lib/RecompFrontend @ main, lib/N64Recomp @ mod-tool-release
 #
 # !!! UNTESTED — not yet configured/built (no local toolchain). Treat as a first draft.
 #
@@ -22,22 +22,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Tier-2 settings/launcher/cheats menu (src/ui, RmlUi over RT64). ON by default: the launcher +
-# settings + BAR cheats menu ship in the standard build. It depends on the lib/freetype-windows-binaries
-# submodule (vendored); turn the menu OFF with -DBEETLE_ENABLE_UI=OFF to build the bare core port
-# (recompiled code + runtime + RT64) without RmlUi/Freetype.
-option(BEETLE_ENABLE_UI "Build the legacy bespoke RmlUi menu (src/ui) — superseded by BEETLE_ENABLE_FRONTEND" ON)
+# The frontend is RecompFrontend (recompui + recompinput) — the launcher, settings, controls and
+# input layer shared by the wiseguy-style recomps. It is the ONLY UI in this project: the fork's
+# bespoke menu (src/ui) and its top-level RmlUi/lunasvg/Freetype submodules have been removed, so
+# RmlUi now exists solely as RecompFrontend's own vendored dependency, nested inside lib/RecompFrontend.
+#
+# Off only for a deliberately UI-less build (headless testing, or bisecting a renderer problem).
+option(BEETLE_ENABLE_FRONTEND "Build the RecompFrontend launcher/menus (recompui + recompinput)" ON)
 
-# RecompFrontend: the reusable launcher/menu + input layer extracted from Zelda 64: Recompiled
-# (recompui + recompinput). It supersedes src/ui, and brings its own RmlUi/lunasvg/Freetype, so the
-# two cannot be built together — RmlUi would be added twice and the targets would collide.
-option(BEETLE_ENABLE_FRONTEND "Build the RecompFrontend launcher/menus (recompui + recompinput)" OFF)
-
-if (BEETLE_ENABLE_UI AND BEETLE_ENABLE_FRONTEND)
-    message(FATAL_ERROR
-        "BEETLE_ENABLE_UI and BEETLE_ENABLE_FRONTEND are mutually exclusive: both add RmlUi, so the "
-        "targets collide. RecompFrontend replaces src/ui — configure with -DBEETLE_ENABLE_UI=OFF.")
-endif()
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-everything /W4")
@@ -65,56 +57,9 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     target_compile_definitions(rt64 PRIVATE __PRFCHWINTRIN_H)
 endif()
 
-# ---- UI libs (RmlUi + lunasvg + Freetype). The Tier-2 settings/launcher menu (src/ui) is built
-# when -DBEETLE_ENABLE_UI=ON. RmlUi needs Freetype: on Windows we point it at the prebuilt
-# lib/freetype-windows-binaries submodule (add it once with:
-#   git submodule add https://github.com/ubawurinna/freetype-windows-binaries.git lib/freetype-windows-binaries
-# ); on Linux/macOS the system Freetype is found. ----
-# NOTE: intentionally NOT run for BEETLE_ENABLE_FRONTEND. RecompFrontend vendors its own
-# freetype-windows-binaries plus a FindFreetype.cmake that defines Freetype::Freetype itself, and
-# CMake refuses to create an imported target twice — so defining ours first breaks its configure.
-if (BEETLE_ENABLE_UI)
-    # Satisfy RmlUi's find_package("Freetype") + Freetype::Freetype requirement. On Windows the
-    # standard FindFreetype can't locate the prebuilt binaries' spaced path, so create the imported
-    # target ourselves before RmlUi's dependency scan runs.
-    if (WIN32 AND NOT TARGET Freetype::Freetype)
-        set(BAR_FT_DIR "${CMAKE_SOURCE_DIR}/lib/freetype-windows-binaries")
-        if (NOT EXISTS "${BAR_FT_DIR}/include/ft2build.h")
-            message(FATAL_ERROR
-                "BEETLE_ENABLE_UI=ON but lib/freetype-windows-binaries is missing. Add it with:\n"
-                "  git submodule add https://github.com/ubawurinna/freetype-windows-binaries.git lib/freetype-windows-binaries")
-        endif()
-        # The prebuilt-binaries repo's static-lib dir is VS-version-stamped (vs2015-2022/win64, vs2026/x64,
-        # ...) and changes over time — glob for the x64 static lib instead of hardcoding the version path.
-        file(GLOB_RECURSE BAR_FT_LIBS
-            "${BAR_FT_DIR}/release static/*/x64/freetype.lib"
-            "${BAR_FT_DIR}/release static/*/win64/freetype.lib")
-        if (NOT BAR_FT_LIBS)
-            message(FATAL_ERROR "freetype.lib not found under '${BAR_FT_DIR}/release static/*/x64' — check the submodule layout")
-        endif()
-        list(GET BAR_FT_LIBS 0 BAR_FT_LIB)
-        message(STATUS "BeetleRecomp: using Freetype ${BAR_FT_LIB}")
-        add_library(Freetype::Freetype STATIC IMPORTED)
-        set_target_properties(Freetype::Freetype PROPERTIES
-            IMPORTED_LOCATION "${BAR_FT_LIB}"
-            INTERFACE_INCLUDE_DIRECTORIES "${BAR_FT_DIR}/include")
-    endif()
-
-    # RmlUi + lunasvg for the LEGACY menu only. RecompFrontend vendors its own copies under
-    # lib/RecompFrontend/recompui/lib and adds them itself, so adding ours as well would define the
-    # same targets twice. Only the Freetype imported target above is shared between the two.
-    if (BEETLE_ENABLE_UI)
-        set(BUILD_SHARED_LIBS OFF)
-        set(LUNASVG_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-        add_subdirectory(${CMAKE_SOURCE_DIR}/lib/lunasvg)
-        set(RMLUI_SVG_PLUGIN ON CACHE BOOL "" FORCE)
-        set(RMLUI_TESTS_ENABLED OFF CACHE BOOL "" FORCE)
-        set(RMLUI_SAMPLES OFF CACHE BOOL "" FORCE)        # no RmlUi samples/backend — we render via our RT64 bridge
-        set(RMLUI_BACKEND "auto" CACHE STRING "" FORCE)   # unused when samples are off, but must be a valid value
-        add_subdirectory(${CMAKE_SOURCE_DIR}/lib/RmlUi)
-        target_compile_definitions(rmlui_core PRIVATE LUNASVG_BUILD_STATIC)
-    endif()
-endif()
+# NOTE: this project deliberately does NOT define Freetype::Freetype. RecompFrontend vendors its own
+# freetype-windows-binaries and a FindFreetype.cmake that creates that imported target itself, and
+# CMake refuses to create an imported target twice.
 
 # ---- N64ModernRuntime: provides the `librecomp` and `ultramodern` targets ----
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime)
@@ -313,49 +258,6 @@ endif()
 # ---------------------------------------------------------------------------
 # Tier-2 settings/launcher menu (src/ui) — RmlUi rendered through RT64.
 # ---------------------------------------------------------------------------
-if (BEETLE_ENABLE_UI)
-    target_sources(BeetleRecomp PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/ui/ui_renderer.cpp                  # RmlUi -> RT64 (plume) render bridge
-        ${CMAKE_SOURCE_DIR}/src/ui/bar_ui.cpp                       # bootstrap + render hooks + menu controller
-        ${CMAKE_SOURCE_DIR}/lib/RmlUi/Backends/RmlUi_Platform_SDL.cpp  # SystemInterface_SDL + SDL->RmlUi input
-    )
-    target_compile_definitions(BeetleRecomp PRIVATE
-        BEETLE_ENABLE_UI
-        RMLUI_SDL_VERSION_MAJOR=2          # the SDL platform backend targets SDL2
-    )
-    target_include_directories(BeetleRecomp PRIVATE
-        ${CMAKE_SOURCE_DIR}/lib/RmlUi/Include
-        ${CMAKE_SOURCE_DIR}/lib/RmlUi/Backends
-        ${CMAKE_SOURCE_DIR}/lib/rt64/src/rhi              # rt64_render_hooks.h
-        ${CMAKE_SOURCE_DIR}/lib/rt64/src/render           # rt64_texture_cache.h
-        ${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/plume    # plume_render_interface_builders.h
-        ${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime/thirdparty/concurrentqueue
-        ${CMAKE_BINARY_DIR}/shaders                        # generated Interface{VS,PS}.hlsl.{dxil,spirv}.h
-    )
-    target_link_libraries(BeetleRecomp PRIVATE RmlUi::Core RmlUi::Debugger lunasvg)
-
-    # ---- DXC options (RT64 doesn't export these to the parent scope) for build_*_shader() ----
-    set(DXC_COMMON_OPTS "-I${CMAKE_SOURCE_DIR}/src/ui/shaders")
-    set(DXC_DXIL_OPTS "-Wno-ignored-attributes")
-    set(DXC_SPV_OPTS "-spirv" "-fspv-target-env=vulkan1.0" "-fvk-use-dx-layout")
-    set(DXC_PS_OPTS "${DXC_COMMON_OPTS}" "-E" "PSMain" "-T" "ps_6_0")
-    set(DXC_VS_OPTS "${DXC_COMMON_OPTS}" "-E" "VSMain" "-T" "vs_6_0" "-fvk-invert-y")
-    if (WIN32)
-        set(DXC "${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/dxc/bin/x64/dxc.exe")
-    elseif (CMAKE_SYSTEM_NAME MATCHES "Linux")
-        set(DXC "LD_LIBRARY_PATH=${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/dxc/lib/x64" "${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/dxc/bin/x64/dxc-linux")
-    endif()
-    # Compile the RmlUi interface shaders into C blobs the render bridge #includes. Output lands in
-    # ${CMAKE_BINARY_DIR}/shaders/ (matching the include dir + the InterfaceVS/PS blob names).
-    build_vertex_shader(BeetleRecomp "src/ui/shaders/InterfaceVS.hlsl" "shaders/InterfaceVS.hlsl")
-    build_pixel_shader(BeetleRecomp  "src/ui/shaders/InterfacePS.hlsl" "shaders/InterfacePS.hlsl")
-
-    # ---- Ship the UI assets (documents, stylesheet, fonts) next to the exe under assets/ui/ ----
-    add_custom_command(TARGET BeetleRecomp POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:BeetleRecomp>/assets/ui"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_SOURCE_DIR}/src/ui/assets" "$<TARGET_FILE_DIR:BeetleRecomp>/assets/ui")
-endif()
 
 # ---- Bring-up crash diagnosis: embed debug info (/Z7) in the boot-path targets + emit a PDB.
 # RT64 is deliberately left at Release (no option change -> not rebuilt) since the early-boot

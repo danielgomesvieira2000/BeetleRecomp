@@ -298,6 +298,22 @@ void flush_rumble() {
         touched[idx] = true;
         if (g_rumble_want[port].load(std::memory_order_relaxed)) want[idx] = true;
     }
+
+    // Auto pad: mirror the input auto-fold above. A keyboard-driven port 0 with an unclaimed
+    // controller also receives port 0's rumble, so simply plugging a pad in gives both steering and
+    // vibration with no assignment step — which matters now that a port presents a Controller Pak
+    // and a Rumble Pak at once, and doubly so while there is no Controls UI to assign devices in.
+    if (cfg->ports[0].connected && cfg->ports[0].device.type == DeviceType::Keyboard
+        && cfg->ports[0].pak != PakType::None) {
+        for (int i = 0; i < (int)g_pads.size() && i < 16; i++) {
+            if (!res.claimed[i]) {
+                touched[i] = true;
+                if (g_rumble_want[0].load(std::memory_order_relaxed)) want[i] = true;
+                break;
+            }
+        }
+    }
+
     for (int i = 0; i < (int)g_pads.size() && i < 16; i++) {
         if (!touched[i]) { last_on[i] = false; continue; }
         if (want[i] != last_on[i]) {

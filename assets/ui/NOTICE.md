@@ -1,46 +1,41 @@
 # UI asset provenance and licensing
 
-These assets back the RecompFrontend (`recompui`) launcher and menus. They are staged next to the
-executable as `assets/` at build time, because recompui resolves every asset as
+These assets back the RecompFrontend (`recompui`) launcher and menus. The build stages this whole
+directory next to the executable as `assets/`, because recompui resolves every asset as
 `<exe dir>/assets/<name>`.
 
-The goal is deliberate: this port should wear **Zelda 64: Recompiled's frontend look**, not a
-bespoke theme, so its stylesheet is used as-is wherever possible.
+## The shape of this directory is deliberate
 
-## recomp.rcss, rml.rcss
+It mirrors `danielgomesvieira2000/wave-race-64-recomp`, the reference N64: Recompiled port for this
+project: a near-empty `recomp.rcss`, `icons/`, and `promptfont/`.
 
-From [Zelda 64: Recompiled](https://github.com/Zelda64Recomp/Zelda64Recomp) (`assets/`), which is
-licensed **GPL-3.0**. This project is AGPL-3.0, and AGPLv3 §13 explicitly permits combining with
-GPLv3 works, so the combination is fine — the obligation is to keep the source public and credit
-the origin, which this file and the project credits do.
+**`recomp.rcss` is intentionally tiny.** recompui's elements style themselves in code from a named
+theme palette (Background1..3, Text, Primary, Secondary, Warning, Danger, Success, Border), which is
+why every one of these ports looks alike. A stylesheet that sets its own colours does not restyle
+those elements, it competes with them. The one thing the library genuinely cannot know is the font,
+so that is all this file supplies. To restyle the menus, call `recompui::theme::set_theme_color`
+from C++ rather than adding rules here.
 
-`recomp.rcss` is kept byte-identical to upstream except for a clearly delimited
-`BeetleRecomp overrides` block appended at the end. Keep local changes inside that block so the
-upstream sheet can be refreshed by overwriting everything above it.
+An earlier attempt imported Zelda 64: Recompiled's 62 KB `recomp.rcss`. That was wrong: that sheet
+belongs to Zelda64Recomp's older in-repo UI rather than to RecompFrontend, and it sets
+`body { font-family: chiaro }` — a Nintendo-associated typeface that is not redistributable here.
+Do not reintroduce it.
 
-The one override that is not cosmetic: upstream sets `body { font-family: chiaro }`, and **Chiaro
-is a Nintendo-associated typeface that is not redistributable here**. It is deliberately not
-bundled, so the override re-points the body font at Lato. Do not add Chiaro to this directory.
+## recomp.rcss, icons/
+
+From `danielgomesvieira2000/wave-race-64-recomp`, this project's own reference port.
 
 ## LatoLatin-Regular.ttf
 
-Lato, by Łukasz Dziedzic, under the **SIL Open Font License 1.1**. Note the font's internal family
-name is `LatoLatin`, not `Lato` — RmlUi matches on the internal name, so registering the wrong one
-silently renders no text at all.
+Lato, by Łukasz Dziedzic — **SIL Open Font License 1.1**.
+
+The font's internal family name is **`LatoLatin`**, not `Lato`. RmlUi matches on the internal name,
+and registering the wrong one fails silently in a way that wastes hours: every element lays out and
+draws in the right place, with no text in any of them. It must stay in sync with
+`kPrimaryFontFamily` in `src/frontend/bar_frontend.cpp` and with `body` in `recomp.rcss`.
 
 ## promptfont/
 
-PromptFont, by Yukari "Shinmera" Hafner — controller and key glyphs used by `recompinput` to draw
-button prompts. **SIL Open Font License 1.1**; `promptfont/LICENSE.txt` is included as the licence
+PromptFont, by Yukari "Shinmera" Hafner — controller and key glyphs used by `recompinput` for button
+prompts. **SIL Open Font License 1.1**; `promptfont/LICENSE.txt` ships alongside as the licence
 requires.
-
-## icons/
-
-`Arrow.svg`, `Plus.svg`, `Quit.svg`, `RecordBorder.svg`, `Reset.svg`, `Trash.svg`, `X.svg` come from
-Zelda 64: Recompiled (GPL-3.0), as above.
-
-`Caret.svg`, `Cont.svg`, `Keyboard.svg`, `PlusKeyboard.svg`, `Question.svg` and `RecordSpinner.svg`
-were written for this project: `recompui` is a newer extraction than the Zelda64Recomp tree and
-references icons that predate it, so those had no upstream counterpart. They are simple monochrome
-glyphs drawn with `currentColor` so they theme with the rest of the UI. Replace them with upstream
-artwork if RecompFrontend ever ships its own.

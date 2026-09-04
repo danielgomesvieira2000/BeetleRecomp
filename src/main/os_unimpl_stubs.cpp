@@ -254,6 +254,21 @@ extern "C" void __osSiRawStartDma_recomp(uint8_t* rdram, recomp_context* ctx) {
           ++n; if (t0 == 0) t0 = ms;
           if (ms - t0 >= 1000) { std::fprintf(stderr, "[BAR_DBG_FPS] %lu SI-polls/sec (== menu loop rate)\n", n); n = 0; t0 = ms; }
       } }
+    // TEMPORARY (BAR_DBG_DIV=1): log BAR's whole-frame divider D_8001F7C0 alongside the game state.
+    // The timeline system is delta-timed and measured correct (~1/60), so anything running fast must
+    // advance a fixed amount per RENDERED frame. If the console runs menus at divider 2 (30 fps) and
+    // we render every frame (divider 1), those animations play at double speed. Base-game address, so
+    // it is plain RDRAM and readable directly. Remove once diagnosed.
+    { static const bool dbg = std::getenv("BAR_DBG_DIV") != nullptr;
+      if (dbg) {
+          static int32_t last_div = -0x7FFF, last_st = -0x7FFF;
+          const int32_t div = (int32_t)MEM_W(0, (int64_t)(int32_t)0x8001F7C0);
+          const int32_t st  = (int32_t)MEM_W(0XA4, (int64_t)(int32_t)0x80025CF0);
+          if (div != last_div || st != last_st) {
+              std::fprintf(stderr, "[BAR_DBG_DIV] frame divider = %d   (currentGameState = %d)\n", div, st);
+              last_div = div; last_st = st;
+          }
+      } }
     // R6 tooling (env-gated BAR_DBG_STATE): log currentGameState (gGameSettings+0xA4) transitions so a
     // BAR_AUTOPLAY script can be tuned/verified headlessly (boot -> logos -> intro -> menu=0xE -> race=2).
     { static const bool dbg = std::getenv("BAR_DBG_STATE") != nullptr;

@@ -7,6 +7,9 @@
 #include "recompui/renderer.h"
 #include "recompui/config.h"
 #include "recompinput/input_events.h"
+#include "recompinput/profiles.h"
+#include "librecomp/game.hpp"
+#include <filesystem>
 
 namespace {
 
@@ -79,6 +82,19 @@ void bar::frontend::install() {
     recompui::config::create_sound_tab();
     recompui::config::create_controls_tab();
     recompui::config::finalize();
+
+    // Input bindings. This is what makes the menus DRIVEABLE, and nothing else calls it:
+    // load_controls_config() is the only public entry point that reaches
+    // profiles::initialize_input_bindings(), which builds the key/button -> menu-action mapping
+    // recompui navigates with. Without it the UI still renders and RmlUi still highlights on hover
+    // (its own hit-testing), but no key or button maps to Accept/Back/navigate, so nothing can be
+    // activated — the menu looks alive and is completely inert.
+    //
+    // The call also seeds sensible keyboard and controller defaults when the file does not exist
+    // yet, and writes controls.json alongside the other config files.
+    const std::filesystem::path controls_path = recomp::get_config_path() / "controls.json";
+    const bool loaded = recompinput::profiles::load_controls_config(controls_path);
+    trace(loaded ? "controls config loaded" : "controls config created from defaults");
 
     trace("install: done");
 }
