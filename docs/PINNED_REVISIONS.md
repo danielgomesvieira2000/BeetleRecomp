@@ -114,3 +114,41 @@ Step 7 is not optional and is not idempotent-by-accident: it encodes seven behav
 fixes (heap cap, controller input, intro skip, MIDI stop-wait, cooperative preemption,
 SP_STATUS guard) keyed to N64 instruction addresses in generated C. Retiring those into
 named patches is Phase 1 of the project plan.
+
+## RecompFrontend integration notes
+
+`lib/RecompFrontend` (recompui + recompinput) is the reusable launcher/menu and input layer
+extracted from Zelda 64: Recompiled. It consumes N64ModernRuntime and RT64 **by path** rather than
+by target (`RECOMP_FRONTEND_N64MODERNRUNTIME_PATH`, `RECOMP_FRONTEND_RT64_PATH`), so it reuses the
+runtime and renderer this port already builds instead of duplicating them.
+
+Configure with:
+
+```bash
+cmake -S . -B build-frontend -G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl \
+      -DCMAKE_BUILD_TYPE=Release -DBEETLE_ENABLE_UI=OFF -DBEETLE_ENABLE_FRONTEND=ON
+```
+
+Three integration constraints, each of which broke the build once:
+
+1. **`BEETLE_ENABLE_UI` and `BEETLE_ENABLE_FRONTEND` are mutually exclusive.** RecompFrontend
+   vendors its own RmlUi and lunasvg under `recompui/lib`; adding ours as well defines the same
+   targets twice. CMake now fails fast with an explanatory error. This is by design — RecompFrontend
+   *replaces* `src/ui`.
+2. **Do not pre-define `Freetype::Freetype`.** RecompFrontend ships its own
+   `freetype-windows-binaries` submodule and a `FindFreetype.cmake` that creates the imported
+   target itself, and CMake refuses to create one twice. Our Windows Freetype shim therefore runs
+   only for the legacy `BEETLE_ENABLE_UI` path.
+3. **SDL2 must be acquired before `add_subdirectory(lib/RecompFrontend)`.** Both frontend libraries
+   `#include "SDL.h"` and read `sdl2_SOURCE_DIR` / `SDL2_INCLUDE_DIRS` at configure time; their own
+   CMake flags this as a standalone-build limitation. Our SDL2 FetchContent originally sat beside
+   the `BeetleRecomp` target, far below, so the frontend configured with an empty include path
+   (visible as a bare `-I\include` on the command line) and failed to find `SDL.h`.
+
+### ROM verification
+
+The registered `recomp::GameEntry` for `bar.n64.us` carries
+`rom_hash = 0x56cfec69d7951f9f`, which is the **XXH3-64 of the USA z64** and was verified against
+the real ROM — despite the stale `TODO` beside it. `recompui`'s
+`add_start_game_or_load_rom_option()` drives its `rom_valid` state from librecomp's validation, so
+the launcher's ROM loading and verification are backed by that hash directly.

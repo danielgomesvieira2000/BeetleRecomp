@@ -26,7 +26,18 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # settings + BAR cheats menu ship in the standard build. It depends on the lib/freetype-windows-binaries
 # submodule (vendored); turn the menu OFF with -DBEETLE_ENABLE_UI=OFF to build the bare core port
 # (recompiled code + runtime + RT64) without RmlUi/Freetype.
-option(BEETLE_ENABLE_UI "Build the RmlUi settings/launcher/cheats menu (requires the Freetype submodule)" ON)
+option(BEETLE_ENABLE_UI "Build the legacy bespoke RmlUi menu (src/ui) — superseded by BEETLE_ENABLE_FRONTEND" ON)
+
+# RecompFrontend: the reusable launcher/menu + input layer extracted from Zelda 64: Recompiled
+# (recompui + recompinput). It supersedes src/ui, and brings its own RmlUi/lunasvg/Freetype, so the
+# two cannot be built together — RmlUi would be added twice and the targets would collide.
+option(BEETLE_ENABLE_FRONTEND "Build the RecompFrontend launcher/menus (recompui + recompinput)" OFF)
+
+if (BEETLE_ENABLE_UI AND BEETLE_ENABLE_FRONTEND)
+    message(FATAL_ERROR
+        "BEETLE_ENABLE_UI and BEETLE_ENABLE_FRONTEND are mutually exclusive: both add RmlUi, so the "
+        "targets collide. RecompFrontend replaces src/ui — configure with -DBEETLE_ENABLE_UI=OFF.")
+endif()
 
 if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND CMAKE_CXX_SIMULATE_ID STREQUAL "MSVC")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-everything /W4")
@@ -59,6 +70,9 @@ endif()
 # lib/freetype-windows-binaries submodule (add it once with:
 #   git submodule add https://github.com/ubawurinna/freetype-windows-binaries.git lib/freetype-windows-binaries
 # ); on Linux/macOS the system Freetype is found. ----
+# NOTE: intentionally NOT run for BEETLE_ENABLE_FRONTEND. RecompFrontend vendors its own
+# freetype-windows-binaries plus a FindFreetype.cmake that defines Freetype::Freetype itself, and
+# CMake refuses to create an imported target twice — so defining ours first breaks its configure.
 if (BEETLE_ENABLE_UI)
     # Satisfy RmlUi's find_package("Freetype") + Freetype::Freetype requirement. On Windows the
     # standard FindFreetype can't locate the prebuilt binaries' spaced path, so create the imported
@@ -86,19 +100,75 @@ if (BEETLE_ENABLE_UI)
             INTERFACE_INCLUDE_DIRECTORIES "${BAR_FT_DIR}/include")
     endif()
 
-    set(BUILD_SHARED_LIBS OFF)
-    set(LUNASVG_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-    add_subdirectory(${CMAKE_SOURCE_DIR}/lib/lunasvg)
-    set(RMLUI_SVG_PLUGIN ON CACHE BOOL "" FORCE)
-    set(RMLUI_TESTS_ENABLED OFF CACHE BOOL "" FORCE)
-    set(RMLUI_SAMPLES OFF CACHE BOOL "" FORCE)        # no RmlUi samples/backend — we render via our RT64 bridge
-    set(RMLUI_BACKEND "auto" CACHE STRING "" FORCE)   # unused when samples are off, but must be a valid value
-    add_subdirectory(${CMAKE_SOURCE_DIR}/lib/RmlUi)
-    target_compile_definitions(rmlui_core PRIVATE LUNASVG_BUILD_STATIC)
+    # RmlUi + lunasvg for the LEGACY menu only. RecompFrontend vendors its own copies under
+    # lib/RecompFrontend/recompui/lib and adds them itself, so adding ours as well would define the
+    # same targets twice. Only the Freetype imported target above is shared between the two.
+    if (BEETLE_ENABLE_UI)
+        set(BUILD_SHARED_LIBS OFF)
+        set(LUNASVG_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+        add_subdirectory(${CMAKE_SOURCE_DIR}/lib/lunasvg)
+        set(RMLUI_SVG_PLUGIN ON CACHE BOOL "" FORCE)
+        set(RMLUI_TESTS_ENABLED OFF CACHE BOOL "" FORCE)
+        set(RMLUI_SAMPLES OFF CACHE BOOL "" FORCE)        # no RmlUi samples/backend — we render via our RT64 bridge
+        set(RMLUI_BACKEND "auto" CACHE STRING "" FORCE)   # unused when samples are off, but must be a valid value
+        add_subdirectory(${CMAKE_SOURCE_DIR}/lib/RmlUi)
+        target_compile_definitions(rmlui_core PRIVATE LUNASVG_BUILD_STATIC)
+    endif()
 endif()
 
 # ---- N64ModernRuntime: provides the `librecomp` and `ultramodern` targets ----
 add_subdirectory(${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime)
+
+# ---- RecompFrontend: recompui (launcher/settings/mods, built on RmlUi) + recompinput (SDL2 input,
+# controller profiles). It consumes N64ModernRuntime and RT64 by PATH rather than by target, so it
+# reuses the very same runtime and renderer this port already builds. Must come after
+# N64ModernRuntime, which provides the `miniz` target recompui links. ----
+if (BEETLE_ENABLE_FRONTEND)
+    # recompui/recompinput include SDL2 headers directly and expect either sdl2_SOURCE_DIR (the
+    # Windows FetchContent layout) or SDL2_INCLUDE_DIRS (a system package) to be set ALREADY — their
+    # own CMake notes this as a standalone-build limitation. Our SDL2 acquisition lives further down
+    # beside the BeetleRecomp target, which is too late: the frontend would configure with an empty
+    # include path and fail on `#include "SDL.h"`. Acquire it here first. Both calls are idempotent,
+    # so the later block simply reuses what this populates.
+    if (WIN32)
+        include(FetchContent)
+        set(SDL2_VERSION "2.30.3")
+        FetchContent_Declare(sdl2
+            URL https://github.com/libsdl-org/SDL/releases/download/release-${SDL2_VERSION}/SDL2-devel-${SDL2_VERSION}-VC.zip)
+        FetchContent_MakeAvailable(sdl2)
+    else()
+        find_package(SDL2 REQUIRED)
+    endif()
+
+    # recompui compiles its RmlUi interface shaders with RT64's build_vertex_shader/build_pixel_shader
+    # macros, which read these DXC_* variables from the enclosing scope — and RT64 does not export
+    # them to the parent. Without them DXC emits nothing, and the follow-up bin2c step fails with
+    # "Failed to open file ... InterfaceVS.hlsl.dxil! (Or it's empty)". Set them BEFORE the
+    # add_subdirectory so the frontend's scope inherits them. Entry points match ours (VSMain/PSMain).
+    set(DXC_COMMON_OPTS "-I${CMAKE_SOURCE_DIR}/lib/RecompFrontend/recompui/shaders")
+    set(DXC_DXIL_OPTS "-Wno-ignored-attributes")
+    set(DXC_SPV_OPTS "-spirv" "-fspv-target-env=vulkan1.0" "-fvk-use-dx-layout")
+    set(DXC_PS_OPTS "${DXC_COMMON_OPTS}" "-E" "PSMain" "-T" "ps_6_0")
+    set(DXC_VS_OPTS "${DXC_COMMON_OPTS}" "-E" "VSMain" "-T" "vs_6_0" "-fvk-invert-y")
+    if (WIN32)
+        set(DXC "${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/dxc/bin/x64/dxc.exe")
+    elseif (CMAKE_SYSTEM_NAME MATCHES "Linux")
+        set(DXC "LD_LIBRARY_PATH=${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/dxc/lib/x64" "${CMAKE_SOURCE_DIR}/lib/rt64/src/contrib/dxc/bin/x64/dxc-linux")
+    endif()
+
+    set(RECOMP_FRONTEND_N64MODERNRUNTIME_PATH ${CMAKE_SOURCE_DIR}/lib/N64ModernRuntime CACHE PATH "" FORCE)
+    set(RECOMP_FRONTEND_RT64_PATH             ${CMAKE_SOURCE_DIR}/lib/rt64             CACHE PATH "" FORCE)
+    add_subdirectory(${CMAKE_SOURCE_DIR}/lib/RecompFrontend)
+
+    # Same SDL_endian.h / _m_prefetch clash the rt64 target is guarded against above, reached here
+    # through the FetchContent SDL2 instead of RT64's vendored copy: SDL defines the builtin manually
+    # as an old Clang-11 workaround, and clang 17+ rejects redefining it. Setting SDL's own guard
+    # macro makes it defer to the compiler builtin.
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_definitions(recompui    PRIVATE __PRFCHWINTRIN_H)
+        target_compile_definitions(recompinput PRIVATE __PRFCHWINTRIN_H)
+    endif()
+endif()
 
 # Shared include set for the generated C and the host.
 set(RECOMP_INCLUDES
@@ -218,6 +288,12 @@ target_link_libraries(BeetleRecomp PRIVATE
     ultramodern
     rt64
 )
+
+# ---- RecompFrontend launcher/menus + input ----
+if (BEETLE_ENABLE_FRONTEND)
+    target_link_libraries(BeetleRecomp PRIVATE recompui recompinput)
+    target_compile_definitions(BeetleRecomp PRIVATE BEETLE_ENABLE_FRONTEND)
+endif()
 # ---------------------------------------------------------------------------
 # Tier-2 settings/launcher menu (src/ui) — RmlUi rendered through RT64.
 # ---------------------------------------------------------------------------
