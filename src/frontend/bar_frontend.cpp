@@ -20,7 +20,7 @@ constexpr const char*    kDisplayName = "Beetle Adventure Racing!";
 // is REQUIRED: recompui throws "No primary font was registered" without it. The family name is what
 // the stylesheet must reference, and is not necessarily the filename.
 constexpr const char* kPrimaryFontFile   = "LatoLatin-Regular.ttf";
-constexpr const char* kPrimaryFontFamily = "Lato";
+constexpr const char* kPrimaryFontFamily = "LatoLatin";   // the font file's real family name
 
 // TEMPORARY bring-up tracing. The frontend build currently exits during renderer/UI setup with no
 // diagnostic, so these mark how far the sequence gets. Remove once it starts cleanly.
