@@ -38,6 +38,7 @@
 #include "dlrewrite.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -111,7 +112,11 @@ struct RaceTest {
     // the centre, so they would jump between anchored and centred on alternate lists. The frame's
     // shape is therefore remembered across the last few lists (set by rewrite()).
     bool recent_world = false;
-    bool race() const { return (world_first || recent_world) && seen_ortho; }
+    // A race list contains the world (a perspective projection) and a 2D layer (an orthographic
+    // one) -- in either order. BAR's race lists open with a placeholder matrix, so requiring the
+    // world to come FIRST (as the reference did) marked every real race "not a race".
+    bool seen_world = false;
+    bool race() const { return (seen_world || recent_world) && seen_ortho; }
 };
 
 enum class Class { Auto, Left, Right, Stretch };
@@ -626,10 +631,31 @@ struct Walker {
             }
             if (op == kOpSetTextureImage) { texture = w1; continue; }
             if (is_rect(op)) { rects.add(rect_extent(w0, w1)); continue; }
+            // Segment and viewport loads issued inside a called list take effect for everything
+            // after it, so the walker's own tables follow them. BAR sets the segment its HUD
+            // projection lives in from a sub-list; without this the projection read as all zeros
+            // and every HUD extent was garbage.
+            if (op == kOpMoveWord && (w0 & 0xFF) == kMoveWordSegment) {
+                segments[(((w0 >> 8) & 0xFFFF) / 4) & 0xF] = w1 & 0x00FFFFFFu;
+                continue;
+            }
+            if (op == kOpMoveMem && (w0 & 0xFF) == kMoveMemViewport) {
+                have_viewport = true;
+                viewport_w0 = w0;
+                viewport_w1 = w1;
+                continue;
+            }
             if (op == kOpPopMtx) { if (mv_depth > 0) --mv_depth; continue; }
             if (op == kOpMtx) {
                 const uint32_t params = w0 & 0xFF;
-                if (params & kMtxProjection) continue;    // rare in a called list; ignored
+                if (params & kMtxProjection) {
+                    // BAR loads its HUD projection INSIDE the HUD sub-lists; the loads at the root are
+                    // placeholders that read as zeros. Matrix state persists after a called list
+                    // returns, so this goes through the walker's own projection tracking, and the
+                    // vertex loads after it in this sub-list are measured against it.
+                    on_matrix(w0, w1);
+                    continue;
+                }
                 const Mat4 loaded = read_matrix(physical(w1));
                 if (!(params & kMtxNoPush) && mv_depth < 15) { mv[mv_depth + 1] = mv[mv_depth]; ++mv_depth; }
                 mv[mv_depth] = (params & kMtxLoad) ? loaded : loaded * mv[mv_depth];
@@ -666,7 +692,8 @@ struct Walker {
                 race_test.first_projection_seen = true;
                 race_test.world_first = projection_is_perspective;
             }
-            if (!projection_is_perspective) race_test.seen_ortho = true;
+            if (projection_is_perspective) race_test.seen_world = true;
+            else race_test.seen_ortho = true;
             return;
         }
         if (!(params & kMtxNoPush) && modelview_depth < 15) {
@@ -760,16 +787,20 @@ uint32_t rewrite(uint8_t* rdram, uint32_t list_vaddr) {
         if (op == kOpDisplayList) {
             const bool branch = ((w0 >> 16) & 0xFF) != 0;
             if (branch) { cursor = w.physical(w1); continue; }
-            // Measured under either projection: under the world's, classify_draw keeps only flat
-            // (screen-aligned) sub-lists, which is how BAR draws most of its HUD.
-            if (w.hud && w.have_projection) {
+            // Every pushed list is scanned, whatever the projection: the scan is also what keeps the
+            // segment table and the current viewport in step with loads issued inside sub-lists.
+            // Classification needs a projection to measure against; under the world's, classify_draw
+            // keeps only flat (screen-aligned) sub-lists, which is how BAR draws most of its HUD.
+            {
                 Mat4 mv[16];
                 std::memcpy(mv, w.modelview, sizeof(mv));
                 int depth = w.modelview_depth;
                 Extent rects;
                 const Extent e = w.scan(w.physical(w1), 0, mv, depth, rects);
-                if (!e.empty()) w.classify_draw(e, w1);
-                if (!rects.empty()) w.classify_rect(rects, w1, {});
+                if (w.hud && w.have_projection) {
+                    if (!e.empty()) w.classify_draw(e, w1);
+                    if (!rects.empty()) w.classify_rect(rects, w1, {});
+                }
             }
             w.emit(w0, w1);
             continue;
@@ -808,10 +839,11 @@ uint32_t rewrite(uint8_t* rdram, uint32_t list_vaddr) {
             if (projection_load && w.rect_cls != Class::Auto) w.set_rect_class(Class::Auto);
             w.on_matrix(w0, w1);
             if (projection_load && w.trace != nullptr) {
-                char line[160];
-                std::snprintf(line, sizeof(line), "[hud] projection load %s [1][1]=%.4f [2][3]=%.4f [3][3]=%.3f (viewport %s)\n",
+                char line[200];
+                std::snprintf(line, sizeof(line), "[hud] projection load %s [1][1]=%.4f [2][3]=%.4f [3][3]=%.3f from 0x%08X -> phys 0x%06X seg%u=0x%06X (viewport %s)\n",
                               w.projection_is_perspective ? "perspective" : "orthographic",
                               w.projection.m[1][1], w.projection.m[2][3], w.projection.m[3][3],
+                              w1, w.physical(w1), (w1 >> 24) & 0xF, w.segments[(w1 >> 24) & 0xF],
                               w.have_viewport ? "seen" : "not yet seen");
                 w.trace->append(line);
             }
@@ -838,16 +870,24 @@ uint32_t rewrite(uint8_t* rdram, uint32_t list_vaddr) {
         return 0;
     }
 
-    lists_since_world = w.race_test.world_first ? 0 : lists_since_world + 1;
+    lists_since_world = w.race_test.seen_world ? 0 : lists_since_world + 1;
 
     static uint32_t last_draws = 0xFFFFFFFFu;
+    static uint32_t list_counter = 0;
+    static const auto trace_start = std::chrono::steady_clock::now();
+    ++list_counter;
     const bool composition_changed = w.draws_2d != last_draws;
     last_draws = w.draws_2d;
-    if (w.trace != nullptr && w.written >= 30 && (traced_lists < 6 || composition_changed)) {
+    // Printed for the first few lists, whenever the number of 2D elements changes, and every 250th
+    // list regardless, so a screen that holds steady (a race in progress) still gets a sample;
+    // the elapsed time lets a list be matched to a screenshot.
+    const bool periodic = (list_counter % 250) == 0;
+    if (w.trace != nullptr && w.written >= 30 && (traced_lists < 6 || composition_changed || periodic)) {
         ++traced_lists;
-        std::fprintf(stderr, "[hud] ---- list %u: %u commands, %u 2D draws, %u class changes, anchors %s, race %s"
+        const double elapsed = std::chrono::duration<double>(std::chrono::steady_clock::now() - trace_start).count();
+        std::fprintf(stderr, "[hud] ---- list %u (t=%.1fs): %u commands, %u 2D draws, %u class changes, anchors %s, race %s"
                              " (world-first %d, ortho %d, scissor %d,%d-%d,%d) ----\n%s",
-                     traced_lists, w.written, w.draws_2d, w.class_changes, w.anchors ? "on" : "off",
+                     list_counter, elapsed, w.written, w.draws_2d, w.class_changes, w.anchors ? "on" : "off",
                      w.race_test.race() ? "yes" : "no", w.race_test.world_first ? 1 : 0,
                      w.race_test.seen_ortho ? 1 : 0, w.scissor_left, w.scissor_top, w.scissor_right,
                      w.scissor_bottom, trace_text.c_str());

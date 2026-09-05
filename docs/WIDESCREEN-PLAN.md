@@ -125,10 +125,18 @@ opcode is `0xE0` only when `F3DEX_GBI_2` is defined before including `rt64_exten
 (otherwise `0x00`, and RT64 drops the list); and BAR's track projection has `m[2][3] ≈ -0.30`, which a
 version that took only `|m[2][3]| == 1` as the world mis-classed and stretched the terrain.
 
-**Not yet verified in a race**: automated attract-mode runs kept landing on the cinematic, where the
-flat-draw detection and the car-model exclusion both behave correctly, but the race HUD itself has not
-been observed anchored. The first thing to check is a race with `hr_option: Expand`; if an element is
-wrong, `BAR_HUD_TRACE=1` names it for `hud.json`.
+**Verified in the demo race** (auto-start build, `hr_option` not Original): speedometer and its
+digits anchored to the left edge, timer, lap counter, map and position to the right edge, world
+untouched (`BAR_HUD_TRACE` classes: `x[25..77] -> left`, `x[235..291] -> right`, …). Three more
+findings on the way there, each of which made the HUD silently unanchored:
+
+- BAR sets the segment its matrices live in, and loads projections, from **inside called sub-lists**;
+  the walker tracks segment, viewport and projection loads inside `scan()` as well as at the root.
+- A race list does **not** open with the world projection (it opens with a placeholder matrix), so
+  "race" means a list containing a world projection and a 2D one in any order, remembered across the
+  several lists BAR submits per frame.
+- The "deep" draws under the world projection with widely varying `w` are the AI cars, not the HUD;
+  the race HUD is drawn under true 2D projections (`m[3][3] == 1`) late in the list.
 
 ## Phase W5 — Verification
 
