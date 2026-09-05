@@ -47,6 +47,20 @@ but that is layout (it is authored inside the safe area), not a transform.
 - *The last-clip-rect globals* (`D_uvgfxmgr_rom_00402408..0E`): zero-initialised `.bss`, only read
   by two fill routines; cannot shape the 3D.
 
+**Findings from the display-list rewriter (6 Sep 2026).** With the whole list visible per draw:
+
+- The game's viewport loads are all full-frame (`vscale 638x478`) and the RDP scissor is full, yet
+  the world stays clipped to the island in pixel space -- while scaling the world projection
+  (`BAR_PROJ_FIX=1`) visibly magnifies the island's *contents* without moving its edges. The island
+  is therefore not the frustum and not the viewport: it is a layer composited over the render.
+- That layer is a **full-frame texture-rectangle pair** drawn each frame: texture `0x803DA800` (the
+  other framebuffer) on the main menu, `0x00172830` in a race, rows 0..223 and 224..239. RT64 draws
+  it centred at the original 320 width even when told to stretch it, and its black 22-pixel margins
+  are the columns; this frame's widened world shows past it as the slivers at the far edges.
+- Two switches exist to settle it in a real race: `BAR_HUD_SKIP_BLIT=1` drops those full-frame
+  texture rectangles (fill rectangles, i.e. the clear, are kept); `BAR_VP_FIX=1` and `BAR_PROJ_FIX=1`
+  are the viewport and projection experiments, both shown NOT to be the cause.
+
 **Remaining candidates, untested:** the game's own frustum culling and sky/terrain construction
 (`uvterra`, `uvdyn`, `motion` -- all still assembly) building geometry to the inset frustum, so that
 nothing exists to draw outside it; or a second transform between the projection and the RSP. The
