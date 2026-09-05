@@ -67,7 +67,6 @@ namespace {
 constexpr uint32_t kScratch = 0x80C00000u;       // above the 8 MB the game sees, inside RT64's 16 MB
 constexpr uint32_t kScratchSize = 0x40000u;      // 256 KB: 32768 commands
 constexpr uint32_t kMaxCommands = kScratchSize / 8;
-constexpr uint32_t kMtxSlotCount = 512;          // scaled projection copies, after the commands (64 B each)
 
 // F3DEX2 opcodes the walk has to understand. Everything else is copied.
 constexpr uint8_t kOpVtx = 0x01;
@@ -269,55 +268,9 @@ struct Walker {
     Class cls = Class::Auto;
     uint32_t class_changes = 0;
     uint32_t draws_2d = 0;
-    uint32_t mtx_slots = 0;     // scaled projection copies written this list (BAR_PROJ_FIX)
     int scissor_left = 0x7FFF, scissor_top = 0x7FFF, scissor_right = -1, scissor_bottom = -1;
 
     Walker() { modelview[0] = Mat4::identity(); }
-
-    // BAR_VP_FIX: the world is drawn through a viewport the camera code builds for the 275x207
-    // overscan-safe rectangle -- vscale (550, 414) vtrans (640, 480) in 10.2 -- which is what leaves
-    // the world in an island with black beside it (the projection is a normal one mapping the
-    // frustum to the whole viewport; scaling it only magnified the island's contents). A viewport
-    // covering the whole framebuffer has vscale (640, 480) and the same centre. RT64 reads the Vp
-    // from the game's memory when it meets the load, so an inset Vp is replaced: at the root of the
-    // list a corrected copy is written to scratch and the load re-pointed; inside a called list
-    // (which is executed from the game's memory, not copied) the Vp is corrected in place -- the
-    // game never reads it back, it only rebuilds it.
-    bool vp_fix = false;
-    uint32_t vp_slots = 0;
-    uint32_t vp_scratch_base = 0;   // physical; set by rewrite()
-    static bool vp_inset(uint16_t sx, uint16_t sy) {
-        // Anything narrower than the frame but wider than half of it: the overscan inset, not a
-        // deliberately small viewport (a split-screen half, a picture-in-picture).
-        return (sx < 640 && sx > 400) || (sy < 480 && sy > 300);
-    }
-    void write_half(uint32_t physical_addr, uint16_t v) {
-        *reinterpret_cast<uint16_t*>(rdram + ((physical_addr & 0x00FFFFFFu) ^ 2)) = v;
-    }
-    // Returns the address to load from (segmented/physical as given, or the scratch copy).
-    uint32_t fix_viewport(uint32_t vp_segmented, bool in_place) {
-        const uint32_t src = physical(vp_segmented);
-        const uint16_t sx = half(src + 0), sy = half(src + 2), tx = half(src + 8), ty = half(src + 10);
-        if (trace != nullptr) {
-            char line[140];
-            std::snprintf(line, sizeof(line), "[hud] viewport load 0x%08X vscale(%u,%u) vtrans(%u,%u)%s\n",
-                          vp_segmented, sx, sy, tx, ty, vp_inset(sx, sy) ? "  <- inset" : "");
-            trace->append(line);
-        }
-        if (!vp_fix || !vp_inset(sx, sy)) return vp_segmented;
-        if (in_place) {
-            write_half(src + 0, 640); write_half(src + 2, 480);
-            write_half(src + 8, 640); write_half(src + 10, 480);
-            return vp_segmented;
-        }
-        const uint32_t slot = vp_slots++;
-        if (slot >= 256) return vp_segmented;
-        const uint32_t dst = vp_scratch_base + slot * 16;
-        for (uint32_t i = 0; i < 16; i += 2) write_half(dst + i, half(src + i));
-        write_half(dst + 0, 640); write_half(dst + 2, 480);
-        write_half(dst + 8, 640); write_half(dst + 10, 480);
-        return 0x80000000u | dst;
-    }
 
     uint32_t physical(uint32_t segmented) const {
         const uint32_t base = segments[(segmented >> 24) & 0xF];
@@ -475,24 +428,8 @@ struct Walker {
         const bool near_x = r.min_x <= run.max_x + gap && r.max_x >= run.min_x - gap;
         return overlap_y && near_x;
     }
-    // BAR_HUD_SKIP_BLIT=1: drop full-frame TEXTURE rectangles (a fill rectangle -- the clear, texture
-    // 0 -- is kept). BAR composites the previous frame's framebuffer onto the new one as two
-    // full-width texture rectangles; drawn centred at the original width over RT64's widened
-    // render, that blit is what leaves the world in an island with black columns beside it.
-    bool skip_blit = false;
-    uint32_t skipped_blits = 0;
-    int skip_halves = 0;        // a skipped texture rectangle's two trailing RDPHALF commands
-    static bool full_frame(const Extent& r) {
-        return (r.right_px() - r.left_px()) >= 300.0f && ((r.max_y - r.min_y) * 120.0f) >= 12.0f;
-    }
     void push_rect(uint32_t w0, uint32_t w1) {
         const Extent r = rect_extent(w0, w1);
-        if (skip_blit && texture != 0 && full_frame(r)) {
-            ++skipped_blits;
-            const uint8_t op = static_cast<uint8_t>(w0 >> 24);
-            if (op == kOpTexRect || op == kOpTexRectFlip) skip_halves = 2;
-            return;
-        }
         if (pending_active && !chains(pending_extent, r)) flush_run();
         if (!pending_active) {
             pending_active = true;
@@ -623,11 +560,7 @@ struct Walker {
             return Class::Auto;
         }
         if (e.empty()) return Class::Auto;
-        // A full-width element is stretched across the widened frame. For an RDP rectangle this is
-        // safe under either projection (the stretch is a per-rectangle flag, not the projection
-        // group's), and it matters: BAR's full-frame clear is a fill rectangle issued under the
-        // world projection, and left unstretched it cleared only the 4:3 region.
-        if (covers_width(e) && (!projection_is_perspective || screen_element)) return Class::Stretch;
+        if (covers_width(e) && !projection_is_perspective) return Class::Stretch;
         if (projection_is_perspective && !screen_element) return Class::Auto;
         if (!anchors || !race_test.race()) return Class::Auto;
         if (e.min_x < -1.0f || e.max_x > 1.0f || e.min_y < -1.0f || e.max_y > 1.0f) return Class::Auto;
@@ -663,10 +596,7 @@ struct Walker {
         ++draws_2d;
         const std::string tex_id = hex_identity("tex", texture);
         const std::string dl_id = dl_segmented != 0 ? hex_identity("dl", dl_segmented) : std::string{};
-        Class next = classify(e, tex_id, dl_id, screen_element);
-        // Stretching a vertex draw is a flag on its projection GROUP; under the world projection
-        // that would stretch the world. Only rectangles may stretch there.
-        if (projection_is_perspective && next == Class::Stretch) next = Class::Auto;
+        const Class next = classify(e, tex_id, dl_id, screen_element);
         if (trace != nullptr) {
             char line[220];
             std::snprintf(line, sizeof(line),
@@ -700,28 +630,7 @@ struct Walker {
                 continue;
             }
             if (op == kOpSetTextureImage) { texture = w1; continue; }
-            if (op == 0xFF && trace != nullptr) {   // G_SETCIMG inside a called list
-                char line[120];
-                std::snprintf(line, sizeof(line), "[hud] color image 0x%08X width %u (in dl@0x%06X)\n", w1, (w0 & 0xFFF) + 1, physical_addr);
-                trace->append(line);
-                continue;
-            }
-            if (is_rect(op)) {
-                const Extent r = rect_extent(w0, w1);
-                rects.add(r);
-                // Each rectangle inside a called list, individually: the union above can hide two
-                // narrow margin fills as one harmless full-width extent.
-                if (trace != nullptr) {
-                    char line[160];
-                    std::snprintf(line, sizeof(line), "[hud] subrect %s in dl@0x%06X px x[%.0f..%.0f] y[%.0f..%.0f] under %s\n",
-                                  hex_identity("tex", texture).c_str(), physical_addr,
-                                  (r.min_x + 1.0f) * 160.0f, (r.max_x + 1.0f) * 160.0f,
-                                  (1.0f - r.max_y) * 120.0f, (1.0f - r.min_y) * 120.0f,
-                                  projection_is_perspective ? "persp" : "ortho");
-                    trace->append(line);
-                }
-                continue;
-            }
+            if (is_rect(op)) { rects.add(rect_extent(w0, w1)); continue; }
             // Segment and viewport loads issued inside a called list take effect for everything
             // after it, so the walker's own tables follow them. BAR sets the segment its HUD
             // projection lives in from a sub-list; without this the projection read as all zeros
@@ -731,7 +640,6 @@ struct Walker {
                 continue;
             }
             if (op == kOpMoveMem && (w0 & 0xFF) == kMoveMemViewport) {
-                fix_viewport(w1, /*in_place=*/true);   // this list runs from the game's memory
                 have_viewport = true;
                 viewport_w0 = w0;
                 viewport_w1 = w1;
@@ -833,18 +741,6 @@ uint32_t rewrite(uint8_t* rdram, uint32_t list_vaddr) {
     static const bool no_enable = std::getenv("BAR_HUD_NO_ENABLE") != nullptr;
     const uint32_t scratch = scratch_low ? 0x80700000u : kScratch;
 
-    // BAR_PROJ_FIX=1 scales the world projection by 320/275 x 240/207 (the overscan inset);
-    // BAR_PROJ_FIX=x,y uses the given factors. See the G_MTX handling below.
-    static float proj_fix_x = 1.0f, proj_fix_y = 1.0f;
-    static const bool proj_fix = [] {
-        const char* e = std::getenv("BAR_PROJ_FIX");
-        if (e == nullptr) return false;
-        float x = 0.0f, y = 0.0f;
-        if (std::sscanf(e, "%f,%f", &x, &y) == 2 && x > 0.0f && y > 0.0f) { proj_fix_x = x; proj_fix_y = y; return true; }
-        if (e[0] == '1' && e[1] == 0) { proj_fix_x = 320.0f / 275.0f; proj_fix_y = 240.0f / 207.0f; return true; }
-        return false;
-    }();
-
     const auto& config = ultramodern::renderer::get_graphics_config();
 
     Walker w{};
@@ -857,11 +753,6 @@ uint32_t rewrite(uint8_t* rdram, uint32_t list_vaddr) {
     static uint32_t lists_since_world = 1000;   // how many lists ago a world (perspective-first) list was seen
     w.race_test.recent_world = lists_since_world <= 2;
     w.out = reinterpret_cast<uint32_t*>(rdram + (scratch & 0x00FFFFFFu));
-    static const bool vp_fix = std::getenv("BAR_VP_FIX") != nullptr;
-    w.vp_fix = vp_fix;
-    static const bool skip_blit = std::getenv("BAR_HUD_SKIP_BLIT") != nullptr;
-    w.skip_blit = skip_blit;
-    w.vp_scratch_base = (scratch & 0x00FFFFFFu) + kScratchSize + kMtxSlotCount * 64;
     if (tracing) {
         trace_text.clear();
         w.trace = &trace_text;
@@ -879,7 +770,6 @@ uint32_t rewrite(uint8_t* rdram, uint32_t list_vaddr) {
         const uint8_t op = static_cast<uint8_t>(w0 >> 24);
         cursor += 8;
 
-        if (w.skip_halves > 0 && (op == kOpRdpHalf1 || op == kOpRdpHalf2)) { --w.skip_halves; continue; }
         if (w.hud && is_rect(op)) { w.push_rect(w0, w1); continue; }
         if (w.pending_active && Walker::run_command(op)) {
             if (op == kOpSetTextureImage) w.texture = w1;
@@ -926,11 +816,10 @@ uint32_t rewrite(uint8_t* rdram, uint32_t list_vaddr) {
             continue;
         }
         if (op == kOpMoveMem && (w0 & 0xFF) == kMoveMemViewport) {
-            const uint32_t vp_addr = w.fix_viewport(w1, /*in_place=*/false);
             w.have_viewport = true;
             w.viewport_w0 = w0;
-            w.viewport_w1 = vp_addr;
-            w.emit(w0, vp_addr);
+            w.viewport_w1 = w1;
+            w.emit(w0, w1);
             continue;
         }
         if (op == kOpSetScissor) {
@@ -942,11 +831,6 @@ uint32_t rewrite(uint8_t* rdram, uint32_t list_vaddr) {
             continue;
         }
         if (op == kOpSetTextureImage) { w.texture = w1; w.emit(w0, w1); continue; }
-        if (op == 0xFF && w.trace != nullptr) {   // G_SETCIMG: which framebuffer the following draws land in
-            char line[120];
-            std::snprintf(line, sizeof(line), "[hud] color image 0x%08X width %u (root)\n", w1, (w0 & 0xFFF) + 1);
-            w.trace->append(line);
-        }
         if (op == kOpPopMtx) { if (w.modelview_depth > 0) --w.modelview_depth; w.emit(w0, w1); continue; }
         if (op == kOpMtx) {
             const uint32_t params = w0 & 0xFF;
@@ -954,35 +838,6 @@ uint32_t rewrite(uint8_t* rdram, uint32_t list_vaddr) {
             if (projection_load && w.cls != Class::Auto) w.leave_class(true);
             if (projection_load && w.rect_cls != Class::Auto) w.set_rect_class(Class::Auto);
             w.on_matrix(w0, w1);
-            // BAR_PROJ_FIX=1: undo the overscan inset baked into the game's world projection.
-            //
-            // BAR's camera maps its frustum into 275/320 of the width and 207/240 of the height of
-            // the framebuffer (a CRT overscan-safe margin), so the world sits in an island with black
-            // beside it -- in 4:3 and, once RT64 widens the frame, between the island and the widened
-            // edges. Scaling column 0 of the projection by 320/275 and column 1 by 240/207 maps the
-            // frustum edges to the framebuffer edges. The matrix is not modified in place (it is the
-            // game's own memory); a scaled copy is written into scratch memory and the load is
-            // pointed at the copy. Only world (perspective) loads are treated; the 2D layer keeps
-            // its projections as authored.
-            if (projection_load && w.projection_is_perspective && proj_fix) {
-                const uint32_t slot = w.mtx_slots++;
-                if (slot < kMtxSlotCount) {
-                    const uint32_t src = w.physical(w1);
-                    const uint32_t dst = (scratch & 0x00FFFFFFu) + kScratchSize + slot * 64;
-                    // 16 integer halves then 16 fraction halves; each element is reassembled, scaled,
-                    // and split again. Halves sit at their offset XOR 2 in this runtime's RDRAM.
-                    for (int i = 0; i < 16; i++) {
-                        const int col = i % 4;
-                        int32_t v = int32_t((uint32_t(w.half(src + 2 * i)) << 16) | w.half(src + 32 + 2 * i));
-                        if (col == 0) v = int32_t(float(v) * proj_fix_x);
-                        else if (col == 1) v = int32_t(float(v) * proj_fix_y);
-                        *reinterpret_cast<uint16_t*>(rdram + ((dst + 2 * i) ^ 2)) = uint16_t(uint32_t(v) >> 16);
-                        *reinterpret_cast<uint16_t*>(rdram + ((dst + 32 + 2 * i) ^ 2)) = uint16_t(uint32_t(v) & 0xFFFF);
-                    }
-                    w.emit(w0, 0x80000000u | dst);
-                    continue;
-                }
-            }
             if (projection_load && w.trace != nullptr) {
                 char line[200];
                 std::snprintf(line, sizeof(line), "[hud] projection load %s [1][1]=%.4f [2][3]=%.4f [3][3]=%.3f from 0x%08X -> phys 0x%06X seg%u=0x%06X (viewport %s)\n",

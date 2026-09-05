@@ -138,6 +138,13 @@ findings on the way there, each of which made the HUD silently unanchored:
 - The "deep" draws under the world projection with widely varying `w` are the AI cars, not the HUD;
   the race HUD is drawn under true 2D projections (`m[3][3] == 1`) late in the list.
 
+### Black columns beside the world (parked)
+
+See `docs/KNOWN_ISSUES.md`, "the picture sits in a 275x207 island". Summary: a full-frame backdrop
+layer BAR draws each frame carries the overscan margins; dropping it removes the top/bottom bars but
+breaks frame erasure; the layer has to be redrawn across the widened frame with its margins cropped,
+from inside the sub-list that issues it. Experiments are on branch `wip/island-experiments`.
+
 ## Phase W5 — Verification
 
 - Every track, both split-screen viewports, at 16:9 **and** 21:9.

@@ -61,6 +61,29 @@ but that is layout (it is authored inside the safe area), not a transform.
   texture rectangles (fill rectangles, i.e. the clear, are kept); `BAR_VP_FIX=1` and `BAR_PROJ_FIX=1`
   are the viewport and projection experiments, both shown NOT to be the cause.
 
+**Parked 6 Sep 2026 at Daniel's request — what was learned, in order of certainty.**
+
+1. *The bars belong to a full-frame layer BAR draws every frame.* It is a pair of texture
+   rectangles covering rows 0..223 and 224..239 (texture `0x00172830` in a race, the other
+   framebuffer `0x803DA800` on the main menu). Its content is the 275x207 picture with the
+   overscan margins black. Dropping it (`BAR_HUD_SKIP_BLIT=1`, branch `wip/island-experiments`)
+   **removed the top and bottom bars** and moved the side bars from the middle of the frame to its
+   far edges — so the world geometry is drawn directly and does extend nearly to the widened edges.
+   It also broke the picture: the layer is what erases the previous frame, and without it the car and
+   background flicker and smear. So the layer must stay; the fix is to draw it across the widened
+   frame with its margins cropped, not to drop it.
+2. *Neither the viewport nor the projection is the cause.* Every viewport load the game issues is
+   full-frame (`vscale 638x478`), and scaling the world projection at the display-list level
+   (`BAR_PROJ_FIX=1`) magnifies the island's contents without moving its edges.
+3. *Cropping and pinning the layer's rectangles at the list root did nothing* (`BAR_HUD_LAYER_FIX=1`:
+   left/right edges 22..297, texture start +22, `gEXSetRectAlign(LEFT, RIGHT)`). The likely reason is
+   that in a race the rectangles are issued from a called sub-list, which the rewriter executes from
+   the game's memory rather than copying, so its edits never reach them. The next step, if resumed,
+   is to copy the sub-list that contains them into scratch and rewrite it there.
+4. *A regression to avoid:* letting full-width rectangles stretch under the world projection (to
+   make the clear cover the widened frame) caused flicker and ghosting in races on its own. The
+   rewriter on the main branch is exactly the version Daniel verified (`ba236b5`).
+
 **Remaining candidates, untested:** the game's own frustum culling and sky/terrain construction
 (`uvterra`, `uvdyn`, `motion` -- all still assembly) building geometry to the inset frustum, so that
 nothing exists to draw outside it; or a second transform between the projection and the RSP. The
