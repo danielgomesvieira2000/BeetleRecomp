@@ -85,9 +85,18 @@ in the right place with no text in any of them.
   (`refresh_primary_controller`).
 - **`rr_option` defaults to `Display`**, i.e. frame interpolation on, with none of the per-object
   matrix annotation done. It is reachable from Settings → Graphics → Framerate.
-- **`fix-recompiled.sh` still carries seven address-keyed rules** against generated C. Migrating
-  them to named `RECOMP_PATCH`/`RECOMP_HOOK` functions is the next planned work, and should happen
-  before widescreen and interpolation add more patch code on top.
+- **`fix-recompiled.sh` carries six address-keyed rules** against generated C (down from seven).
+  They no longer fail silently: every rule now verifies its end state and the script exits non-zero
+  naming the anchor that rotted, so a missing behavioural fix stops the build instead of shipping a
+  game that misbehaves in unrelated-looking ways. `FIXRECOMP_STRICT=0` downgrades that to a warning,
+  for deliberate regeneration only.
+
+  Migrating the remainder to named `RECOMP_PATCH`/`RECOMP_HOOK` functions — which bind to symbol
+  names rather than instruction addresses, and so cannot rot at all — is **blocked**: patches are C
+  cross-compiled to MIPS, and the LLVM installed here (22.1.8) has no MIPS backend. It needs a
+  MIPS-capable toolchain; `BUILDING.md` pins LLVM 18.1.8 for this. Rule F (the per-prologue
+  cooperative-preempt poll, 3,147 injection sites) cannot become a patch in any case, since it
+  applies to every recompiled function body rather than to a named function.
 
 ## Diagnostics worth knowing
 
