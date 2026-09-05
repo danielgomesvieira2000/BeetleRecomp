@@ -11,7 +11,7 @@ The full chain runs, from a cartridge dump to a playable race driven from a menu
 | | |
 |---|---|
 | **Decomp → ELF** | `bar-decomp` rebuilds the ROM byte-for-byte and emits `build/recomp.elf` (133 module sections, 135 `.rel.*`, 665 `__recomp_*` symbols) |
-| **Recompilation** | N64Recomp produces **22,246 functions**; `fix-recompiled.sh` applies its seven rules, all matching their anchors |
+| **Recompilation** | N64Recomp produces **22,246 functions**; `fix-recompiled.sh` applies six rules and verifies every one, failing the build if an anchor rots |
 | **Boot** | Logos, attract cinematics, BAR's own main menu and Options, and races — all rendering correctly at 60 fps |
 | **Frontend** | RecompFrontend launcher: Start Game / Controls / Settings / Exit, navigable by keyboard **and** mouse |
 | **ROM handling** | Verified by the library against the registered XXH3-64 hash; "Load ROM" with a native picker until a valid ROM exists, "Start Game" after |
