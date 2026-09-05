@@ -142,6 +142,20 @@ void set_application_user_config(RT64::Application* app, const ultramodern::rend
     app->userConfig.divotFilter         = to_rt64(config.divot_option);   // BAR seam fix (2B): live VI divot toggle
     app->userConfig.presentFillMode     = to_rt64(config.pfm_option);     // BAR letterbox: live window-fit (pillarbox/crop/stretch)
     app->userConfig.displayBuffering    = RT64::UserConfiguration::DisplayBuffering::Triple;
+
+    // BAR_DBG_GFX=1 reports what actually reached RT64. Widescreen depends on aspectRatio==Expand
+    // (1) surviving into RT64's userConfig, so print it rather than trusting the JSON on disk.
+    if (std::getenv("BAR_DBG_GFX") != nullptr) {
+        std::fprintf(stderr,
+            "[gfx] aspectRatio=%d extAspectRatio=%d extAspectTarget=%.4f resolution=%d resMult=%.2f "
+            "downMult=%d presentFillMode=%d antialiasing=%d refreshRate=%d\n",
+            int(app->userConfig.aspectRatio), int(app->userConfig.extAspectRatio),
+            app->userConfig.extAspectTarget, int(app->userConfig.resolution),
+            app->userConfig.resolutionMultiplier, int(app->userConfig.downsampleMultiplier),
+            int(app->userConfig.presentFillMode), int(app->userConfig.antialiasing),
+            int(app->userConfig.refreshRate));
+        std::fflush(stderr);
+    }
 }
 
 ultramodern::renderer::SetupResult map_setup_result(RT64::Application::SetupResult r) {
