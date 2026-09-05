@@ -5,6 +5,26 @@ Add the negative results, not just the leads — they are the expensive part.
 
 ---
 
+## Intermittent crash in the audio thread
+
+Seen twice while capturing automated runs, roughly 50 seconds into the attract sequence, on builds
+both before and after the presentation changes -- so it is not caused by them.
+
+```
+*** CRASH code=0xc0000005 addr=... ***
+  # 0 func_8000DA6C +0x2ac
+  # 1 alAudioFrame +0x452
+  # 2 uvAudioMgrHandleFrameMesg +0x43a
+  # 3 uvAudioMgrThreadFunc +0x535
+```
+
+An access violation inside libultra's audio library (`alAudioFrame`), reached from Paradigm's audio
+manager thread. `func_8000DA6C` is the unnamed leaf, and is the place to start. Not yet
+investigated; recorded so the stack trace is not lost, and so a future crash here is recognised as a
+recurrence rather than a new regression.
+
+---
+
 ## RESOLVED — Intermittent permanent black screen (game boots, audio plays, no picture)
 
 Fixed in the N64ModernRuntime fork, branch `controller-pak`, commit `9503a9b`. Recorded here
