@@ -5,30 +5,46 @@ Add the negative results, not just the leads — they are the expensive part.
 
 ---
 
-## Widescreen: letterboxed framebuffer pairs are drawn unwidened (columns in the intro)
+## Widescreen: the picture sits in a 275x207 island even with a full-frame scissor and viewport
 
-With `ar_option: Expand`, the intro cinematic shows the picture split into columns: the main shot in
-the centre, black columns either side of it, and slivers of scene at the far edges.
+**What is landed.** Framebuffer pairs whose scissor is full-width but not 4:3-shaped -- the intro's
+letterboxed `320x147` pair, and a pair drawn with no scissor (RT64's unbounded `2048x2048`) -- used to
+fail RT64's per-pair aspect test and were drawn unwidened and centred. They now qualify by
+horizontal coverage (`BAR_ASPECT_FB_COVER`, default 90%). Measured: `adjust=1 scale=1.3333` on those
+pairs afterwards.
 
-**Cause (measured, `BAR_DBG_ASPECT`).** RT64 decides per framebuffer pair whether to widen it, using
-a similarity test on the pair's scissor *ratio*: `|scissorRatio / sourceRatio - 1| < 0.1`. The
-cinematic's pair has scissor `320x147` (ratio 2.18 against a 1.33 source), so it fails and is drawn
-unwidened, centred in the wide render target — while the rest of the frame (`320x240` pairs) is
-widened. The game's letterbox fills land at their 4:3 positions inside the centred region, and the
-outer slivers are whatever the widened passes left there. It is a stable layout, not a per-frame
-flicker: consecutive captures are identical.
+**What is not.** In plain 4:3, with `patches/viewport_patch.c` making the game's scissor and viewport
+cover the whole 320x240 (confirmed with `BAR_DBG_SCISSOR`: the only rects emitted are `(0,0)-(320,240)`
+and the intro's `(0,47)-(320,194)`), the picture STILL occupies a 275x207 island: content spans
+225..1050 of the 160..1120 4:3 region in a 1280x720 window, i.e. exactly 22px and ~17px of the
+framebuffer on each side. In Expand the same island appears with widened slivers of world outside it
+and black columns between -- the "glitched widescreen" look. The 2D HUD also sits inside the island,
+but that is layout (it is authored inside the safe area), not a transform.
 
-**Likely fix (not yet done).** Widening should depend on *horizontal coverage* of the framebuffer,
-not on the rectangle's aspect: a full-width, letterboxed scissor is exactly the case that wants
-widening. Adding "scissor width >= ~90% of framebuffer width" as an alternative qualifier in
-`FramebufferRenderer::addFramebuffer` should make the cinematic widen consistently with the rest of
-the frame. Kept as a separate step so its effect can be attributed.
+**Ruled out, with evidence:**
 
-**Not reproduced.** Daniel reports flicker in widescreen on BAR's menus. Automated captures can now
-reach the Controller Pak prompt (A = `X`) but not the film-strip main menu reliably, and 12-frame
-bursts at 40 ms on every screen reached show no two-state alternation. The viewport patch changes
-what the menus draw (their 3D used the inset viewport), so this needs re-testing on the patched
-build before more investigation.
+- *The RDP scissor and RSP viewport.* Full-frame after the viewport patch; `BAR_DBG_PROJ` reports the
+  projection's scissor-and-viewport intersection as 319-320 wide.
+- *A CPU/RDRAM copy being presented instead of the widened render.* `BAR_DBG_VI` shows the VI
+  presenting `0x1DA800`/`0x200000`, and `BAR_DBG_ASPECT` shows those same buffers receiving widened
+  passes (`adjust=1 scale=1.3333`).
+- *The projection matrix alone.* The inset was assumed to be baked into the perspective matrix
+  (`BAR_DBG_PROJ` shows BAR's 3D projections with `[3][3]=0`, `[2][3]=-0.2955`, tiny `[0][0]`).
+  `barCompensateProjectionInset` (rt64, opt-in `BAR_PROJ_INSET=1`) scales every such matrix by
+  320/275 x 240/207 and the log confirms it runs on all of them -- yet the island's extent does not
+  change at all. A game-side patch of `func_uvimtx_rom_004004D8(Mtx)` was also tried; passing `Mtx`
+  by value through a recompiled patch corrupted the matrix (the world vanished) and was dropped.
+- *The last-clip-rect globals* (`D_uvgfxmgr_rom_00402408..0E`): zero-initialised `.bss`, only read
+  by two fill routines; cannot shape the 3D.
+
+**Remaining candidates, untested:** the game's own frustum culling and sky/terrain construction
+(`uvterra`, `uvdyn`, `motion` -- all still assembly) building geometry to the inset frustum, so that
+nothing exists to draw outside it; or a second transform between the projection and the RSP. The
+next diagnostic is to log, per draw call, the NDC extent of submitted vertices rather than the
+matrix, which tells whether geometry outside the island is ever submitted.
+
+**Note:** in the meantime `BAR_CONTENT_INSET=auto` (renderer-side crop to the game's drawn region)
+still removes the island's margins for presentation, at the cost described in that code.
 
 ---
 

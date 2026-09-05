@@ -99,12 +99,22 @@ widescreen, better than a broken one. Decide by time spent, not by principle.
 
 ## Phase W4 — HUD and 2D
 
-Anchor 2D elements to edges rather than scaling them: speedometer and lap counter to their corners,
-centred elements to centre. `hr_option = Original` keeps 2D at 4:3 as a baseline, and a HUD-aspect
-setting should stay exposed so players can choose.
+Measured facts that fix the design:
 
-Cutscenes and the attract sequence are framed for 4:3 and may be better left pillarboxed than
-widened; that is a judgement call to make with the footage in front of us.
+- Without extended-GBI origins (BAR emits none), RT64 places a 2D rectangle by scaling it about the
+  framebuffer centre by the aspect scale (`convertFixedRect`, origin `NONE`), i.e. 2D rect draws are
+  **stretched** in Expand; orthographic triangle draws get the inverse scale on their projection and
+  stay 4:3-centred. So what the HUD looks like today depends on which primitive each element uses.
+- `hr_option` (RT64 `extAspectRatio`) only moves elements that carry an extended-GBI origin, so for
+  BAR it is currently inert.
+
+The approach is the one `wave-race-64-recomp` uses in `src/dlrewrite.cpp`: a **host-side display-list
+rewriter** that classifies each 2D draw by where it sits on the 320-wide screen -- left third anchored
+to the left edge, right third to the right, full-frame elements stretched, the rest centred -- and
+injects `gEXSetViewportAlign` / projection-group commands so RT64 anchors them, with a per-texture
+override table (`hud.json`) for the exceptions and a HUD Placement setting to turn anchoring on. For
+BAR: speedometer and lap counter to the left edge, timer, map and position to the right, the "GO!"
+and race messages centred. No game patching needed for this step.
 
 ## Phase W5 — Verification
 
