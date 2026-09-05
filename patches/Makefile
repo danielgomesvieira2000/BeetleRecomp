@@ -14,8 +14,15 @@ DECOMP_SRC     ?= ../lib/bar-decomp/src
 CFLAGS   := -target mips -mips2 -mabi=32 -O2 -G0 -mno-abicalls -mno-odd-spreg \
             -mno-check-zero-division -fomit-frame-pointer -ffast-math \
             -fno-unsafe-math-optimizations -fno-builtin-memset
+# Mirror the include set the decomp's own Makefile uses. `include` alone is not enough: ultra64.h
+# and the libultra headers live under include/2.0I and include/2.0I/PR, and the decomp's sources
+# include them unqualified.
 CPPFLAGS := -nostdinc -D_LANGUAGE_C -DMIPS -I dummy_headers \
-            -I $(DECOMP_INCLUDE) -I $(DECOMP_SRC) -I ../lib/rt64/include
+            -I $(DECOMP_INCLUDE) \
+            -I $(DECOMP_INCLUDE)/2.0I \
+            -I $(DECOMP_INCLUDE)/2.0I/PR \
+            -I $(DECOMP_INCLUDE)/libc \
+            -I $(DECOMP_SRC) -I ../lib/rt64/include
 LDFLAGS  := -nostdlib -T patches.ld -T syms.ld -Map patches.map \
             --unresolved-symbols=ignore-all --emit-relocs
 

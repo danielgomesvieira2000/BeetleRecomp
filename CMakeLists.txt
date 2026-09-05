@@ -140,15 +140,24 @@ file(GLOB FUNC_CXX_SOURCES CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/RecompiledFuncs
 target_sources(RecompiledFuncs PRIVATE ${FUNC_C_SOURCES} ${FUNC_CXX_SOURCES})
 
 # ---------------------------------------------------------------------------
-# PatchesLib — recompiled custom patches. Disabled until patches exist
-# (RecompiledPatches/ is produced by `make -C patches && ./N64Recomp patches.toml`).
-# TODO(BAR): uncomment + add to the link list once you author patches.
+# PatchesLib — the recompiled C-to-MIPS patches that override or hook game functions.
+#
+# Produced by:  scripts/build-patches.sh   (patches/*.c -> patches/patches.elf, built in WSL
+#                                           because the Windows LLVM has no MIPS backend)
+#               ./N64Recomp patches.toml   (patches.elf -> RecompiledPatches/patches.c)
+#
+# Optional by design: the tree builds and runs without any patches, so this is wired up only when
+# the recompiled output is actually present. That keeps a fresh clone building before anyone has
+# installed a MIPS toolchain.
 # ---------------------------------------------------------------------------
-# add_library(PatchesLib STATIC
-#     ${CMAKE_SOURCE_DIR}/RecompiledPatches/patches.c
-#     ${CMAKE_SOURCE_DIR}/RecompiledPatches/patches_bin.c)
-# target_compile_options(PatchesLib PRIVATE -fno-strict-aliasing -Wno-unused-variable -Wno-implicit-function-declaration)
-# target_include_directories(PatchesLib PRIVATE ${RECOMP_INCLUDES})
+if (EXISTS ${CMAKE_SOURCE_DIR}/RecompiledPatches/patches.c)
+    add_library(PatchesLib STATIC ${CMAKE_SOURCE_DIR}/RecompiledPatches/patches.c)
+    target_compile_options(PatchesLib PRIVATE -fno-strict-aliasing -Wno-unused-variable -Wno-implicit-function-declaration)
+    target_include_directories(PatchesLib PRIVATE ${RECOMP_INCLUDES} ${CMAKE_SOURCE_DIR}/RecompiledPatches)
+    message(STATUS "BeetleRecomp: linking recompiled patches (RecompiledPatches/patches.c)")
+else()
+    message(STATUS "BeetleRecomp: no RecompiledPatches/patches.c — building without patches")
+endif()
 
 # ---------------------------------------------------------------------------
 # Main executable
@@ -227,12 +236,16 @@ endif()
 
 # ---- Link the runtime + generated code ----
 target_link_libraries(BeetleRecomp PRIVATE
-    # PatchesLib            # enable once patches exist
     RecompiledFuncs
     librecomp
     ultramodern
     rt64
 )
+
+# Patches link BEFORE the recompiled game code so a patched function wins over the original.
+if (TARGET PatchesLib)
+    target_link_libraries(BeetleRecomp PRIVATE PatchesLib)
+endif()
 
 # ---- RecompFrontend launcher/menus + input ----
 if (BEETLE_ENABLE_FRONTEND)

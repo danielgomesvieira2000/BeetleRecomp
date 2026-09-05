@@ -92,11 +92,46 @@ in the right place with no text in any of them.
   for deliberate regeneration only.
 
   Migrating the remainder to named `RECOMP_PATCH`/`RECOMP_HOOK` functions — which bind to symbol
-  names rather than instruction addresses, and so cannot rot at all — is **blocked**: patches are C
-  cross-compiled to MIPS, and the LLVM installed here (22.1.8) has no MIPS backend. It needs a
-  MIPS-capable toolchain; `BUILDING.md` pins LLVM 18.1.8 for this. Rule F (the per-prologue
-  cooperative-preempt poll, 3,147 injection sites) cannot become a patch in any case, since it
-  applies to every recompiled function body rather than to a named function.
+  names rather than instruction addresses, and so cannot rot at all — is now **unblocked**; see
+  "Building MIPS patches" below. Rule F (the per-prologue cooperative-preempt poll, 3,147 injection
+  sites) cannot become a patch in any case, since it applies to every recompiled function body
+  rather than to a named function.
+
+## Building MIPS patches
+
+Patches are C cross-compiled to MIPS that override or hook game functions **by name**, which is what
+makes them immune to the address rot that `fix-recompiled.sh` rules suffer from. The pipeline is
+wired up and verified end to end.
+
+The Windows LLVM used for the host build (22.1.8) has **no MIPS backend** — `llc --version` lists no
+MIPS target and `-target mips` fails with "No available targets are compatible with triple mips".
+That is not a flags problem. Ubuntu's packaged clang carries every target, so patches are built in
+WSL exactly as the decomp is, using `clang-18` because `BUILDING.md` pins LLVM 18.1.8 (19.x is
+documented as miscompiling MIPS) and Ubuntu ships precisely 18.1.8.
+
+One-time setup, inside WSL:
+
+```bash
+sudo apt install -y clang-18 lld-18
+```
+
+Then, from the repo root:
+
+```bash
+scripts/build-patches.sh                 # patches/*.c -> patches/patches.elf (runs in WSL)
+wsl -d Ubuntu -- python3 tools/gen_reference_syms.py elf/recomp.elf     syms/beetleadventurerac.us.syms.toml syms/beetleadventurerac.us.datasyms.toml
+./N64Recomp patches.toml                 # patches.elf -> RecompiledPatches/patches.c
+cmake --build build-frontend -j          # CMake picks up PatchesLib automatically
+```
+
+The reference-symbol TOMLs let the recompiler resolve patch relocations against the game. Nothing
+generated them before, so `tools/gen_reference_syms.py` derives them from the decomp's
+`recomp.elf` (135 executable sections / 3,253 functions, plus data symbols). Two shapes are easy to
+confuse: executable sections use `functions = [{ name, vram, size }]` and data sections use
+`symbols = [{ name, vram }]`.
+
+Patches are **optional**: CMake links `PatchesLib` only when `RecompiledPatches/patches.c` exists, so
+a fresh clone still builds before anyone has installed a MIPS toolchain.
 
 ## Diagnostics worth knowing
 
