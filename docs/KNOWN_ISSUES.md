@@ -7,6 +7,16 @@ Add the negative results, not just the leads — they are the expensive part.
 
 ## Widescreen: the picture sits in a 275x207 island even with a full-frame scissor and viewport
 
+**REVERTED (rt64 back to `b39a680`).** The rt64 commit `aad5142` that followed the verified build --
+the horizontal-coverage widening qualifier (`BAR_ASPECT_FB_COVER`, default 90), the diagnostics and
+the opt-in projection compensation -- was found by Daniel to reintroduce the fast intro and to put a
+black bar over the HUD. The verified build (superproject `e69eb44`, rt64 `b39a680`) has the intro at
+the correct speed and no HUD bar, and it is the checkpoint to build on. The reverted work is kept on
+the rt64 branch `bar/widescreen-diagnostics`; of it, the coverage qualifier is the only behavioural
+change and is the prime suspect, since it makes the unscissored boot-buffer pair and the letterboxed
+intro pair render widened. Do not re-apply it without re-checking the intro speed first.
+
+
 **What is landed.** Framebuffer pairs whose scissor is full-width but not 4:3-shaped -- the intro's
 letterboxed `320x147` pair, and a pair drawn with no scissor (RT64's unbounded `2048x2048`) -- used to
 fail RT64's per-pair aspect test and were drawn unwidened and centred. They now qualify by
