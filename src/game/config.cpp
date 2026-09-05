@@ -129,14 +129,14 @@ GraphicsConfig default_graphics_config() {
     c.wm_option       = WindowMode::Windowed;
     c.hr_option       = HUDRatioMode::Original;
     c.api_option      = GraphicsApi::Auto;                    // RT64 picks D3D12 on Windows / Vulkan on Linux
-    c.ar_option       = AspectRatio::Expand;                  // widescreen: widen the 3D view to the window aspect
+    c.ar_option       = AspectRatio::Original;                // BASELINE: plain 4:3 first, widescreen after
     c.msaa_option     = Antialiasing::MSAA4X;                  // seam fix 2A: 4x MSAA adds edge coverage, softening coplanar seams
     c.rr_option       = RefreshRate::Display;                 // HIGH-FPS: interpolate up to the monitor rate
     c.hpfb_option     = HighPrecisionFramebuffer::Auto;
     c.rr_manual_value = 144;                                  // only consulted when rr_option == Manual
     c.ds_option       = 1;
     c.divot_option    = DivotFilter::Auto;                    // seam fix 2B: match the game's VI divot bit (on for BAR)
-    c.pfm_option      = PresentFillMode::Crop;                // never letterbox: fill the window, crop the overflow
+    c.pfm_option      = PresentFillMode::Pillarbox;           // BASELINE: whole picture, true proportions
     return c;
 }
 
