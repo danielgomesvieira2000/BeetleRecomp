@@ -5,6 +5,47 @@ Add the negative results, not just the leads — they are the expensive part.
 
 ---
 
+## RESOLVED — Intermittent permanent black screen (game boots, audio plays, no picture)
+
+Fixed in the N64ModernRuntime fork, branch `controller-pak`, commit `9503a9b`. Recorded here
+because the symptom is misleading and the mechanism is worth knowing before touching VI code again.
+
+**Symptom.** The game boots and audio plays normally, but nothing is ever drawn. Crucially it was
+*intermittent*: the same binary would run correctly once and then stay black on the next launch,
+which makes it look like a configuration or GPU problem rather than a code defect.
+
+**Cause.** `osViGetCurrentFramebuffer()` returns the current `ViState`'s `framebuffer` field
+verbatim. BAR boots with `osViBlack(TRUE)` and un-blacks *only* once its gfx manager observes that
+value equal to `0x100000` (`uvgfxmgr_rom.c`); until then RT64 has nothing to present, because
+`VI_STATE_BLACK` forces `hStart == 0`.
+
+An earlier change (`0c1bf21`) had made the pre-game dummy VI alternate that framebuffer field
+between `0x100000` and `0x125800`, so RT64 would see a changing origin and keep presenting while the
+launcher is up — without which recompui's `draw_hook` never runs and the launcher paints once and
+then ignores all input. But `set_dummy_vi` only runs while `!is_game_started()`, so whichever value
+it wrote *last* is what the game reads back. Whether BAR ever un-blacked therefore came down to the
+parity of the final dummy frame — a coin toss, hence the intermittency.
+
+**Fix.** `update_vi()` computes `VI_ORIGIN_REG` as `framebuffer + fldRegs[field].origin`, so the
+alternation was moved into the mode's field origin (a second dummy mode, `dummy_mode_alt`). The
+scanout address still changes every frame, so the launcher keeps presenting; the address the game
+reads back is pinned at `0x100000`, so BAR always un-blacks.
+
+**If you touch this again:** the two requirements genuinely conflict, and satisfying only one of
+them produces a different bug — pin the framebuffer and the launcher goes inert; alternate it and
+the picture dies at random. Test *both* paths: the no-frontend auto-start build must reach gameplay,
+and the frontend build's launcher must still respond to input.
+
+**Ruled out along the way** (do not re-run these):
+
+- `RecompiledPatches/patches.c` / `PatchesLib` — disabling it entirely still produced a black screen.
+- The graphics config (`ar_option`, `hr_option`, `rr_option`, `wm_option`) — the fault reproduces on
+  conservative windowed values and the fix holds on fullscreen `Expand`.
+- The `scripts/fix-recompiled.sh` rewrite — its end-state verification passes and rendering is
+  correct with it in place.
+
+---
+
 ## Intro / boot sequence runs too fast
 
 **Status:** open, deferred. **Severity:** cosmetic but immediately visible.
