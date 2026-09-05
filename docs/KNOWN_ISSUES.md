@@ -121,6 +121,19 @@ and the frontend build's launcher must still respond to input.
 
 ## Intro / boot sequence runs too fast
 
+**Status 5 Sep 2026 (parked at Daniel's request).** Daniel reported the intro at the correct speed on
+the build at superproject `e69eb44` / rt64 `b39a680`, then fast again on a source-identical rebuild.
+Measured before parking, all on that source: the attract sequence reaches the same screens at the
+same seconds windowed and fullscreen, idle and under 8 busy threads, and in the frontend build versus
+the auto-start build; the frontend build creates its renderer with `rr_option=Original` (the
+frontend uses RecompFrontend's *own* `recompui::renderer::create_render_context`, not
+`src/main/rt64_render_context.cpp`, so our mapping there never applies to it -- a real difference
+worth remembering); and `BAR_FPS=1` shows the game swapping at ~59-60/s through the logos, prompt
+and cinematic and ~30/s in the race demo, identically in both builds. If the intro runs at 30 Hz on
+hardware, that 60 is the bug itself and the game's VI retrace request is the place to look. No
+configuration or build difference that reproduces "fixed" vs "fast" was found.
+
+
 **Status:** open, deferred. **Severity:** cosmetic but immediately visible.
 
 The boot sequence plays noticeably faster than a reference emulator running the same USA ROM —
