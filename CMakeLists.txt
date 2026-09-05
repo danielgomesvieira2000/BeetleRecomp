@@ -184,7 +184,6 @@ add_executable(BeetleRecomp
     ${CMAKE_SOURCE_DIR}/src/main/bar_preempt.cpp         # cooperative audio-thread preemption (no-underrun)
     ${CMAKE_SOURCE_DIR}/src/main/bar_crash.cpp           # symbolized crash backtrace (debug aid)
     ${CMAKE_SOURCE_DIR}/src/main/bar_input.cpp           # live 4-port runtime input path (device/keymap/rumble/pak)
-    ${CMAKE_SOURCE_DIR}/src/main/dlrewrite.cpp           # display-list rewriter: anchors the 2D layer in widescreen
     ${CMAKE_SOURCE_DIR}/src/game/config.cpp              # host-owned settings persistence + high-FPS enable
     ${CMAKE_SOURCE_DIR}/src/game/input_config.cpp        # 4-port controller settings model + input.json persistence
     ${CMAKE_SOURCE_DIR}/rsp/aspMain.cpp                  # RSPRecomp output: BAR audio ucode (M_AUDTASK)
@@ -196,7 +195,6 @@ target_include_directories(BeetleRecomp PRIVATE
     ${CMAKE_SOURCE_DIR}/src                         # "game/config.hpp", etc.
     ${CMAKE_SOURCE_DIR}/RecompiledFuncs            # recomp_overlays.inl + funcs.h
     ${CMAKE_SOURCE_DIR}/lib/rt64/src
-    ${CMAKE_SOURCE_DIR}/lib/rt64/include           # rt64_extended_gbi.h for the display-list rewriter
     # rt64_render_context.cpp includes RT64's internal headers, which pull in vendored contrib
     # headers (hlslpp, plume, ...). Inherit RT64's full (private) include set so they resolve.
     $<TARGET_PROPERTY:rt64,INCLUDE_DIRECTORIES>

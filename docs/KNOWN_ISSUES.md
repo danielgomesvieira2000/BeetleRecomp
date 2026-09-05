@@ -47,43 +47,6 @@ but that is layout (it is authored inside the safe area), not a transform.
 - *The last-clip-rect globals* (`D_uvgfxmgr_rom_00402408..0E`): zero-initialised `.bss`, only read
   by two fill routines; cannot shape the 3D.
 
-**Findings from the display-list rewriter (6 Sep 2026).** With the whole list visible per draw:
-
-- The game's viewport loads are all full-frame (`vscale 638x478`) and the RDP scissor is full, yet
-  the world stays clipped to the island in pixel space -- while scaling the world projection
-  (`BAR_PROJ_FIX=1`) visibly magnifies the island's *contents* without moving its edges. The island
-  is therefore not the frustum and not the viewport: it is a layer composited over the render.
-- That layer is a **full-frame texture-rectangle pair** drawn each frame: texture `0x803DA800` (the
-  other framebuffer) on the main menu, `0x00172830` in a race, rows 0..223 and 224..239. RT64 draws
-  it centred at the original 320 width even when told to stretch it, and its black 22-pixel margins
-  are the columns; this frame's widened world shows past it as the slivers at the far edges.
-- Two switches exist to settle it in a real race: `BAR_HUD_SKIP_BLIT=1` drops those full-frame
-  texture rectangles (fill rectangles, i.e. the clear, are kept); `BAR_VP_FIX=1` and `BAR_PROJ_FIX=1`
-  are the viewport and projection experiments, both shown NOT to be the cause.
-
-**Parked 6 Sep 2026 at Daniel's request — what was learned, in order of certainty.**
-
-1. *The bars belong to a full-frame layer BAR draws every frame.* It is a pair of texture
-   rectangles covering rows 0..223 and 224..239 (texture `0x00172830` in a race, the other
-   framebuffer `0x803DA800` on the main menu). Its content is the 275x207 picture with the
-   overscan margins black. Dropping it (`BAR_HUD_SKIP_BLIT=1`, branch `wip/island-experiments`)
-   **removed the top and bottom bars** and moved the side bars from the middle of the frame to its
-   far edges — so the world geometry is drawn directly and does extend nearly to the widened edges.
-   It also broke the picture: the layer is what erases the previous frame, and without it the car and
-   background flicker and smear. So the layer must stay; the fix is to draw it across the widened
-   frame with its margins cropped, not to drop it.
-2. *Neither the viewport nor the projection is the cause.* Every viewport load the game issues is
-   full-frame (`vscale 638x478`), and scaling the world projection at the display-list level
-   (`BAR_PROJ_FIX=1`) magnifies the island's contents without moving its edges.
-3. *Cropping and pinning the layer's rectangles at the list root did nothing* (`BAR_HUD_LAYER_FIX=1`:
-   left/right edges 22..297, texture start +22, `gEXSetRectAlign(LEFT, RIGHT)`). The likely reason is
-   that in a race the rectangles are issued from a called sub-list, which the rewriter executes from
-   the game's memory rather than copying, so its edits never reach them. The next step, if resumed,
-   is to copy the sub-list that contains them into scratch and rewrite it there.
-4. *A regression to avoid:* letting full-width rectangles stretch under the world projection (to
-   make the clear cover the widened frame) caused flicker and ghosting in races on its own. The
-   rewriter on the main branch is exactly the version Daniel verified (`ba236b5`).
-
 **Remaining candidates, untested:** the game's own frustum culling and sky/terrain construction
 (`uvterra`, `uvdyn`, `motion` -- all still assembly) building geometry to the inset frustum, so that
 nothing exists to draw outside it; or a second transform between the projection and the RSP. The
@@ -94,6 +57,77 @@ matrix, which tells whether geometry outside the island is ever submitted.
 still removes the island's margins for presentation, at the cost described in that code.
 
 ---
+
+## HUD anchoring in widescreen — built, works, but glitches races; parked (6 Sep 2026)
+
+**Status.** The main branch is the pre-anchoring widescreen build (tree of `b7aae3e`, rt64 `b39a680`):
+Expand widens the 3D world in menus and races, the menus do not flicker, the intro runs at the right
+speed, and the HUD is drawn as RT64 draws it by default (2D rectangles stretched about the centre,
+orthographic triangles centred). Daniel verified this state and asked to return to it after the
+anchoring work turned out to glitch races. **Nothing from the anchoring work is compiled in.**
+
+**What was built (branch `wip/hud-anchoring`, commit `55e93af`; the raw experiments that followed
+are on `wip/island-experiments`).** A host-side F3DEX2 display-list rewriter, `src/main/dlrewrite.cpp`
+plus `dlrewrite.h`, modelled on `wave-race-64-recomp/src/dlrewrite.cpp`. It wraps the renderer
+context (`bar::dlrewrite::wrap(...)` around both `create_render_context` calls in `src/main/main.cpp`),
+copies each root display list the game submits into a scratch region at `0x80C00000` (above the 8 MB
+the game is told it has, so the game can never allocate over it), and while copying:
+
+- tracks segments, the modelview stack, projection loads (also inside called sub-lists), viewport,
+  scissor and the current texture;
+- classifies every 2D draw: full-width draws under a non-perspective projection are tagged *stretch*;
+  draws under a perspective projection are left alone; during a race (`seen_world && seen_ortho`,
+  sticky across the several lists BAR submits per frame) a draw whose centre is in the left third is
+  anchored *left*, in the right third *right*, and the rest are centred;
+- emits `gEXEnable`, `gEXSetViewportAlign` (plus a re-issued viewport), `gEXSetRectAlign` /
+  `gEXSetRectAspect` for texture and fill rectangles, and `gEXMatrixGroup` for projections, so RT64
+  places each element against the widened frame;
+- is switched on only when the frontend's HUD ratio option is not *Original* (`hr_option !=
+  HUDRatioMode::Original`), and can be disabled or traced at run time with `BAR_NO_REWRITE`,
+  `BAR_HUD_OFF`, `BAR_HUD_NOEMIT`, `BAR_HUD_NO_ANCHORS`, `BAR_HUD_TRACE`.
+
+It needs one rt64 change, commit `0203ffb` on our rt64 fork ("Bound the runaway-list guard at RT64's
+16 MB address space"): without it RT64 refuses the scratch copy above 8 MB and the screen goes black.
+`CMakeLists.txt` adds `src/main/dlrewrite.cpp` to the sources and `lib/rt64/include` to the include
+directories (for `rt64_extended_gbi.h`; `F3DEX_GBI_2` must be defined before including it so the hook
+opcode is `0xE0`).
+
+**What was verified.** In a race with HUD ratio set to Expand, the speedometer and lap counter sit at
+the left edge and the timer, map and position at the right edge, on the widened frame. Daniel: *"the
+HUD is anchored now, besides the black columns."*
+
+**Why it is parked.** With the rewriter enabled, races glitch: the car and the background flicker and
+move around. This happens with the plain verified rewriter (`ba236b5` / `55e93af`), not only with the
+later experiments, so the cause is in the rewriter itself, not in the island experiments. It was not
+diagnosed. Candidates to check first when this is resumed, in order:
+
+1. *The scratch copy is reused while RT64 may still be reading it.* The rewriter writes every list of
+   every frame into the same `0x80C00000..+0x40000` region, on the game thread, while the renderer
+   consumes lists on its own thread. If RT64 reads a list after the next one has been written over it,
+   geometry from two frames mixes, which is what flicker and "moving around" look like. Fix to try:
+   ring-buffer the scratch (several slots, advance per list) or copy only what must change.
+2. *The projection group / matrix rewriting.* `gEXMatrixGroup` on the world projection (or the
+   re-issued viewport after `gEXSetViewportAlign`) may disturb RT64's per-frame matrix interpolation,
+   which is exactly what would make the car and background jitter. Test: `BAR_HUD_NO_ANCHORS=1` (keeps
+   the copy, drops the anchors) and `BAR_HUD_NOEMIT=1` (copy only, no extended commands) to see which
+   layer introduces the glitch.
+3. *Race classification bleeding into 3D draws.* Anything classified as a HUD element that is really
+   part of the world (car shadow, skybox rectangles) would be pinned to an edge and appear to move.
+   `BAR_HUD_TRACE=1` prints the classification of every draw.
+
+**How to bring it back.** On a branch: `git cherry-pick ddf8ac1 ba236b5` (rewriter and its race fix),
+set `lib/rt64` to `0203ffb`, rebuild, then work through the candidates above with the run-time
+switches before touching anything else. Keep the main branch on the verified build until a race is
+confirmed clean with anchoring on.
+
+**Separately parked: the black columns beside the world** (see the island section above). They come
+from a full-frame backdrop layer BAR draws each frame as two texture rectangles carrying the overscan
+margins. Dropping the layer (`BAR_HUD_SKIP_BLIT=1` on `wip/island-experiments`) removed the top and
+bottom bars and moved the side bars to the frame edges, but the layer also erases the previous frame,
+so dropping it causes ghosting. Cropping and pinning the rectangles at the list root had no effect,
+most likely because in a race they are issued from a called sub-list the rewriter does not copy. The
+viewport and projection were ruled out (all viewport loads are full-frame; scaling the projection
+only magnifies the island's contents).
 
 ## Intermittent crash in the audio thread
 
@@ -153,16 +187,6 @@ and the frontend build's launcher must still respond to input.
   conservative windowed values and the fix holds on fullscreen `Expand`.
 - The `scripts/fix-recompiled.sh` rewrite — its end-state verification passes and rendering is
   correct with it in place.
-
----
-
-## Checkpoint note (5 Sep 2026, later)
-
-The verified checkpoint (rt64 `b39a680`) has since gained ONE rt64 change: the runaway-display-list
-guard in `rt64_interpreter.cpp` now bounds at RT64's 16 MB address space instead of 8 MB, so the
-display-list rewriter's scratch copy above the game's memory is accepted. It cannot affect any list
-the game submits (all below 8 MB). Per the checkpoint rule it still needs the intro speed and HUD
-re-checked on the next play test.
 
 ---
 

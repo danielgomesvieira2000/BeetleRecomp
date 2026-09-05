@@ -25,7 +25,6 @@
 
 #include "ultramodern/ultramodern.hpp"        // gfx_callbacks_t, audio_callbacks_t
 #include "ultramodern/renderer_context.hpp"   // renderer::callbacks_t, RendererContext, WindowHandle
-#include "dlrewrite.h"                        // display-list rewriter wrapped around the renderer
 #include "ultramodern/error_handling.hpp"     // error_handling::callbacks_t
 #include "ultramodern/events.hpp"             // events::callbacks_t (optional)
 #include "ultramodern/input.hpp"              // input::callbacks_t
@@ -955,17 +954,9 @@ int main(int argc, char** argv) {
     // of src/main/rt64_render_context.cpp. bar::frontend::create_render_context adapts the runtime's
     // 3-argument callback to recompui's 4-argument factory, and pins Console presentation so the
     // main-menu film-roll (a VI-origin pan that never redraws) still animates.
-    // Either context is wrapped by the display-list rewriter (src/main/dlrewrite.cpp), which anchors
-    // the 2D layer in widescreen; BAR_NO_REWRITE=1 makes the wrapper pass every list through.
-    renderer_callbacks.create_render_context =
-        [](uint8_t* rdram, ultramodern::renderer::WindowHandle window_handle, bool developer_mode) {
-            return bar::dlrewrite::wrap(rdram, bar::frontend::create_render_context(rdram, window_handle, developer_mode));
-        };
+    renderer_callbacks.create_render_context = bar::frontend::create_render_context;
 #else
-    renderer_callbacks.create_render_context =
-        [](uint8_t* rdram, ultramodern::renderer::WindowHandle window_handle, bool developer_mode) {
-            return bar::dlrewrite::wrap(rdram, bar_create_rt64_render_context(rdram, window_handle, developer_mode));
-        };
+    renderer_callbacks.create_render_context = bar_create_rt64_render_context;
 #endif
 
     ultramodern::gfx_callbacks_t gfx_callbacks{};
