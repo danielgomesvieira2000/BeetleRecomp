@@ -508,9 +508,50 @@ struct Walker {
         }
         pending.emplace_back(w0, w1);
     }
+    // BAR_HUD_LAYER_FIX=1: BAR draws a full-frame backdrop each frame as texture rectangles (it is
+    // also what erases the previous frame -- dropping it leaves ghosts). RT64 places it centred at
+    // the original width, so its 22-pixel side margins appear as black columns in the middle of the
+    // widened frame. Here the rectangle is cropped to its content (x 22..297) and pinned to the
+    // frame's left and right edges with RT64's rect alignment, so the backdrop spans the widened
+    // frame and its margins are gone. The vertical margins are left alone for now.
+    bool layer_fix = false;
+    uint32_t layer_fixes = 0;
+    bool is_layer_rect(uint32_t w0, uint32_t w1) const {
+        const uint8_t op = static_cast<uint8_t>(w0 >> 24);
+        return (op == kOpTexRect || op == kOpTexRectFlip) && texture != 0 && full_frame(rect_extent(w0, w1));
+    }
     void flush_run() {
         if (pending_active) classify_rect(pending_extent, 0, pending_textures);
-        for (const auto& [w0, w1] : pending) emit(w0, w1);
+        bool layer = false;
+        if (layer_fix) {
+            for (const auto& [w0, w1] : pending) if (is_layer_rect(w0, w1)) { layer = true; break; }
+        }
+        if (layer) {
+            // ulx 22 -> the left edge, lrx 297 -> the right edge. Offsets are in quarter pixels: the
+            // left origin sits at 0, the right at 320, so 22 needs -88 and 297 needs +92.
+            if (GfxCommand* cmd = reserve(2)) gEXSetRectAlign(cmd, G_EX_ORIGIN_LEFT, G_EX_ORIGIN_RIGHT, -88, 0, 92, 0);
+            ++layer_fixes;
+        }
+        for (size_t i = 0; i < pending.size(); i++) {
+            uint32_t w0 = pending[i].first, w1 = pending[i].second;
+            if (layer && is_layer_rect(w0, w1)) {
+                // lrx/lry in word 0, ulx/uly in word 1 (10.2); then the E1 half carries s,t (10.5).
+                w0 = (w0 & 0xFF000FFFu) | (uint32_t(297 * 4) << 12);
+                w1 = (w1 & 0xFF000FFFu) | (uint32_t(22 * 4) << 12);
+                emit(w0, w1);
+                if (i + 1 < pending.size() && static_cast<uint8_t>(pending[i + 1].first >> 24) == kOpRdpHalf1) {
+                    const uint32_t st = pending[i + 1].second;
+                    const uint32_t s = ((st >> 16) + uint32_t(22 << 5)) & 0xFFFFu;
+                    emit(pending[i + 1].first, (s << 16) | (st & 0xFFFFu));
+                    i++;
+                }
+                continue;
+            }
+            emit(w0, w1);
+        }
+        if (layer) {
+            if (GfxCommand* cmd = reserve(2)) gEXSetRectAlign(cmd, G_EX_ORIGIN_NONE, G_EX_ORIGIN_NONE, 0, 0, 0, 0);
+        }
         pending.clear();
         pending_active = false;
     }
@@ -627,7 +668,10 @@ struct Walker {
         // safe under either projection (the stretch is a per-rectangle flag, not the projection
         // group's), and it matters: BAR's full-frame clear is a fill rectangle issued under the
         // world projection, and left unstretched it cleared only the 4:3 region.
-        if (covers_width(e) && (!projection_is_perspective || screen_element)) return Class::Stretch;
+        // Only under a 2D projection. Stretching full-width rectangles under the world projection was
+        // tried (to make the clear cover the widened frame) and produced flicker and ghosting in
+        // races; the build without it was verified by Daniel.
+        if (covers_width(e) && !projection_is_perspective) return Class::Stretch;
         if (projection_is_perspective && !screen_element) return Class::Auto;
         if (!anchors || !race_test.race()) return Class::Auto;
         if (e.min_x < -1.0f || e.max_x > 1.0f || e.min_y < -1.0f || e.max_y > 1.0f) return Class::Auto;
@@ -861,6 +905,8 @@ uint32_t rewrite(uint8_t* rdram, uint32_t list_vaddr) {
     w.vp_fix = vp_fix;
     static const bool skip_blit = std::getenv("BAR_HUD_SKIP_BLIT") != nullptr;
     w.skip_blit = skip_blit;
+    static const bool layer_fix = std::getenv("BAR_HUD_LAYER_FIX") != nullptr;
+    w.layer_fix = layer_fix;
     w.vp_scratch_base = (scratch & 0x00FFFFFFu) + kScratchSize + kMtxSlotCount * 64;
     if (tracing) {
         trace_text.clear();
