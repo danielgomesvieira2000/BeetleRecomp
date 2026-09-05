@@ -119,6 +119,16 @@ and the frontend build's launcher must still respond to input.
 
 ---
 
+## Checkpoint note (5 Sep 2026, later)
+
+The verified checkpoint (rt64 `b39a680`) has since gained ONE rt64 change: the runaway-display-list
+guard in `rt64_interpreter.cpp` now bounds at RT64's 16 MB address space instead of 8 MB, so the
+display-list rewriter's scratch copy above the game's memory is accepted. It cannot affect any list
+the game submits (all below 8 MB). Per the checkpoint rule it still needs the intro speed and HUD
+re-checked on the next play test.
+
+---
+
 ## Intro / boot sequence runs too fast
 
 **Status 5 Sep 2026 (parked at Daniel's request).** Daniel reported the intro at the correct speed on

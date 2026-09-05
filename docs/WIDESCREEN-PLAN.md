@@ -97,24 +97,38 @@ track and object code is still largely `GLOBAL_ASM`. The approach is empirical:
 culling already accepts. That yields a modestly wider view with no popping — worse than full
 widescreen, better than a broken one. Decide by time spent, not by principle.
 
-## Phase W4 — HUD and 2D
+## Phase W4 — HUD and 2D (implemented, awaiting a race check)
 
-Measured facts that fix the design:
+`src/main/dlrewrite.cpp` is the host-side display-list rewriter, modelled on wave-race-64-recomp's and
+re-targeted to F3DEX2. It wraps whichever renderer context is in use (both builds), walks each frame's
+list, and writes a copy with RT64 extended-GBI alignment inserted so the 2D layer can be anchored:
 
-- Without extended-GBI origins (BAR emits none), RT64 places a 2D rectangle by scaling it about the
-  framebuffer centre by the aspect scale (`convertFixedRect`, origin `NONE`), i.e. 2D rect draws are
-  **stretched** in Expand; orthographic triangle draws get the inverse scale on their projection and
-  stay 4:3-centred. So what the HUD looks like today depends on which primitive each element uses.
-- `hr_option` (RT64 `extAspectRatio`) only moves elements that carry an extended-GBI origin, so for
-  BAR it is currently inert.
+- **What counts as 2D.** RDP rectangles (texture and fill), vertex draws under an orthographic
+  projection, and — because BAR draws most of its HUD under the *world* projection as screen-aligned
+  quads — vertex draws whose clip-space `w` is constant across their vertices (`Extent::flat`). World
+  geometry, whose `w` varies, is never touched.
+- **Classes.** Full-width ortho elements are stretched across the widened frame; in a race
+  (a world list followed by ortho, remembered across the several lists BAR submits per frame), an
+  element whose centre is in the left third is anchored left, in the right third anchored right; the
+  rest stays centred. Under the world projection nothing is ever stretched.
+- **Overrides.** `hud.json` in the settings folder, lists `left`/`right`/`center`/`stretch` of
+  identities as `BAR_HUD_TRACE=1` prints them (`tex:0x…` or `dl:0x…`).
+- **Switches.** `BAR_NO_REWRITE=1`, `BAR_HUD_OFF=1`, `BAR_HUD_NOEMIT=1` (classify and trace only),
+  `BAR_HUD_NO_ANCHORS=1`, `BAR_HUD_TRACE=1`. Anchoring is on when `hr_option` is not `Original`.
+- **Scratch list.** At physical `0xC00000` — above the 8 MB the game sees, so the game can never
+  allocate over it. The rt64 fork's runaway-list guard was widened from 8 MB to RT64's 16 MB address
+  space to allow this (`rt64_interpreter.cpp`); with the 8 MB bound the copy was silently refused.
 
-The approach is the one `wave-race-64-recomp` uses in `src/dlrewrite.cpp`: a **host-side display-list
-rewriter** that classifies each 2D draw by where it sits on the 320-wide screen -- left third anchored
-to the left edge, right third to the right, full-frame elements stretched, the rest centred -- and
-injects `gEXSetViewportAlign` / projection-group commands so RT64 anchors them, with a per-texture
-override table (`hud.json`) for the exceptions and a HUD Placement setting to turn anchoring on. For
-BAR: speedometer and lap counter to the left edge, timer, map and position to the right, the "GO!"
-and race messages centred. No game patching needed for this step.
+Three things found the hard way: F3DEX2 packs `G_MOVEWORD` as index in the low byte and offset in
+bits 8–23 (the reverse of Fast3D — wrong segments sent the walk into garbage); the extended-GBI hook
+opcode is `0xE0` only when `F3DEX_GBI_2` is defined before including `rt64_extended_gbi.h`
+(otherwise `0x00`, and RT64 drops the list); and BAR's track projection has `m[2][3] ≈ -0.30`, which a
+version that took only `|m[2][3]| == 1` as the world mis-classed and stretched the terrain.
+
+**Not yet verified in a race**: automated attract-mode runs kept landing on the cinematic, where the
+flat-draw detection and the car-model exclusion both behave correctly, but the race HUD itself has not
+been observed anchored. The first thing to check is a race with `hr_option: Expand`; if an element is
+wrong, `BAR_HUD_TRACE=1` names it for `hud.json`.
 
 ## Phase W5 — Verification
 
