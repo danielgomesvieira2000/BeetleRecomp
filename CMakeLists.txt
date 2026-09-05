@@ -150,12 +150,22 @@ target_sources(RecompiledFuncs PRIVATE ${FUNC_C_SOURCES} ${FUNC_CXX_SOURCES})
 # the recompiled output is actually present. That keeps a fresh clone building before anyone has
 # installed a MIPS toolchain.
 # ---------------------------------------------------------------------------
+#
+# NOT a static library. Patch functions carry the same C names as the recompiled originals and the
+# linker is what makes the patch win. Under clang-cl RECOMP_FUNC expands to a WEAK definition, for the
+# originals and the patches alike, and with two weak definitions the linker keeps whichever it meets
+# first. A static PatchesLib only ever contributes members for symbols that are still undefined when
+# it is scanned; by then RecompiledFuncs' object holding the original has usually been pulled in for
+# some other function, so the original won and the patch was silently ignored -- confirmed with the
+# uvGfxClipRect viewport patch, which linked cleanly and changed nothing. Compiling patches.c
+# directly into the executable puts its definitions in an object file, which the linker sees before
+# it opens any archive, so the patch is the first definition and wins. The wiring is below the
+# add_executable(), where the target exists.
 if (EXISTS ${CMAKE_SOURCE_DIR}/RecompiledPatches/patches.c)
-    add_library(PatchesLib STATIC ${CMAKE_SOURCE_DIR}/RecompiledPatches/patches.c)
-    target_compile_options(PatchesLib PRIVATE -fno-strict-aliasing -Wno-unused-variable -Wno-implicit-function-declaration)
-    target_include_directories(PatchesLib PRIVATE ${RECOMP_INCLUDES} ${CMAKE_SOURCE_DIR}/RecompiledPatches)
-    message(STATUS "BeetleRecomp: linking recompiled patches (RecompiledPatches/patches.c)")
+    set(BEETLE_PATCH_SOURCE ${CMAKE_SOURCE_DIR}/RecompiledPatches/patches.c)
+    message(STATUS "BeetleRecomp: compiling recompiled patches into the executable (RecompiledPatches/patches.c)")
 else()
+    set(BEETLE_PATCH_SOURCE "")
     message(STATUS "BeetleRecomp: no RecompiledPatches/patches.c — building without patches")
 endif()
 
@@ -242,9 +252,13 @@ target_link_libraries(BeetleRecomp PRIVATE
     rt64
 )
 
-# Patches link BEFORE the recompiled game code so a patched function wins over the original.
-if (TARGET PatchesLib)
-    target_link_libraries(BeetleRecomp PRIVATE PatchesLib)
+# Patches are compiled INTO the executable so their definitions precede the recompiled originals
+# in RecompiledFuncs (see the PatchesLib note above for why a static library cannot do this).
+if (BEETLE_PATCH_SOURCE)
+    target_sources(BeetleRecomp PRIVATE ${BEETLE_PATCH_SOURCE})
+    set_source_files_properties(${BEETLE_PATCH_SOURCE} PROPERTIES
+        COMPILE_OPTIONS "-fno-strict-aliasing;-Wno-unused-variable;-Wno-implicit-function-declaration"
+        INCLUDE_DIRECTORIES "${RECOMP_INCLUDES};${CMAKE_SOURCE_DIR}/RecompiledPatches")
 endif()
 
 # ---- RecompFrontend launcher/menus + input ----

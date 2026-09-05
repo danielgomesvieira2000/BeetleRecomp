@@ -121,8 +121,34 @@ Then, from the repo root:
 scripts/build-patches.sh                 # patches/*.c -> patches/patches.elf (runs in WSL)
 wsl -d Ubuntu -- python3 tools/gen_reference_syms.py elf/recomp.elf     syms/beetleadventurerac.us.syms.toml syms/beetleadventurerac.us.datasyms.toml
 ./N64Recomp patches.toml                 # patches.elf -> RecompiledPatches/patches.c
-cmake --build build-frontend -j          # CMake picks up PatchesLib automatically
+cmake -S . -B build-frontend             # re-run once after patches.c first appears (it is globbed)
+cmake --build build-frontend -j
 ```
+
+**How a patch actually replaces the original — and the way it silently failed to.** N64Recomp does not
+remove a patched function from `RecompiledFuncs`; the patch simply carries the same C name and the
+*linker* has to prefer it. Under `clang-cl`, `RECOMP_FUNC` expands to a *weak* definition for the
+originals and the patches alike, and with two weak definitions the linker keeps whichever it meets
+first. The first attempt built patches into a static `PatchesLib`: a static library only contributes
+members for symbols that are still undefined when it is scanned, and by then the `RecompiledFuncs`
+object holding the original had already been pulled in for some other function — so the original won
+every time. The viewport patch below linked cleanly and changed nothing, which is how this was found.
+`RecompiledPatches/patches.c` is therefore compiled **directly into the executable**: an object file's
+definition is seen before any archive is opened, so the patch is the first definition. This mirrors
+`wave-race-64-recomp`, which compiles its patches as executable sources for the same reason.
+
+**The first real patch: `patches/viewport_patch.c`.** BAR draws racing into a 275×207 rectangle inset
+at (22,17) — a CRT overscan-safe margin — which showed up as black bars on a monitor, stopped RT64
+from ever widening the racing projection (it only widens a projection that reaches the framebuffer's
+edges), and once that was relaxed let the widened 3D draw outside the game's own margin fills. The
+patch replaces `uvGfxClipRect` with the original body plus one change: the four known inset edges are
+snapped to the screen edges before the maths runs, leaving interior edges (split-screen boundaries,
+the intro's letterbox) untouched. It uses **no data symbols** — the module is relocatable at runtime
+(its recompiled code reaches `sScreenWidth` through a section-relative relocation), so a patch baking
+absolute addresses could touch the wrong memory; screen size comes from the exported
+`uvGetScreenWidth()/uvGetScreenHeight()` instead. One gotcha cost a full build cycle: **Y is bottom-up
+in this API.** The scissor is emitted as `(x0, height - y1, x1, height - y0)`, so measured scissor rows
+17..224 correspond to `y0 = 16, y1 = 223`, not 17/224.
 
 The reference-symbol TOMLs let the recompiler resolve patch relocations against the game. Nothing
 generated them before, so `tools/gen_reference_syms.py` derives them from the decomp's
@@ -130,8 +156,8 @@ generated them before, so `tools/gen_reference_syms.py` derives them from the de
 confuse: executable sections use `functions = [{ name, vram, size }]` and data sections use
 `symbols = [{ name, vram }]`.
 
-Patches are **optional**: CMake links `PatchesLib` only when `RecompiledPatches/patches.c` exists, so
-a fresh clone still builds before anyone has installed a MIPS toolchain.
+Patches are **optional**: CMake compiles `RecompiledPatches/patches.c` into the executable only when
+it exists, so a fresh clone still builds before anyone has installed a MIPS toolchain.
 
 ## Diagnostics worth knowing
 

@@ -5,6 +5,33 @@ Add the negative results, not just the leads — they are the expensive part.
 
 ---
 
+## Widescreen: letterboxed framebuffer pairs are drawn unwidened (columns in the intro)
+
+With `ar_option: Expand`, the intro cinematic shows the picture split into columns: the main shot in
+the centre, black columns either side of it, and slivers of scene at the far edges.
+
+**Cause (measured, `BAR_DBG_ASPECT`).** RT64 decides per framebuffer pair whether to widen it, using
+a similarity test on the pair's scissor *ratio*: `|scissorRatio / sourceRatio - 1| < 0.1`. The
+cinematic's pair has scissor `320x147` (ratio 2.18 against a 1.33 source), so it fails and is drawn
+unwidened, centred in the wide render target — while the rest of the frame (`320x240` pairs) is
+widened. The game's letterbox fills land at their 4:3 positions inside the centred region, and the
+outer slivers are whatever the widened passes left there. It is a stable layout, not a per-frame
+flicker: consecutive captures are identical.
+
+**Likely fix (not yet done).** Widening should depend on *horizontal coverage* of the framebuffer,
+not on the rectangle's aspect: a full-width, letterboxed scissor is exactly the case that wants
+widening. Adding "scissor width >= ~90% of framebuffer width" as an alternative qualifier in
+`FramebufferRenderer::addFramebuffer` should make the cinematic widen consistently with the rest of
+the frame. Kept as a separate step so its effect can be attributed.
+
+**Not reproduced.** Daniel reports flicker in widescreen on BAR's menus. Automated captures can now
+reach the Controller Pak prompt (A = `X`) but not the film-strip main menu reliably, and 12-frame
+bursts at 40 ms on every screen reached show no two-state alternation. The viewport patch changes
+what the menus draw (their 3D used the inset viewport), so this needs re-testing on the patched
+build before more investigation.
+
+---
+
 ## Intermittent crash in the audio thread
 
 Seen twice while capturing automated runs, roughly 50 seconds into the attract sequence, on builds
