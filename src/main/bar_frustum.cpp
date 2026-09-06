@@ -28,6 +28,7 @@
 // fields are checked against the six arguments -- if the memory does not hold exactly what we were
 // passed, this is not a channel and it is left alone. That guard is what keeps the second, non-channel
 // projection at 0x80025920 safe.
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -71,10 +72,24 @@ float envScale(const char *name, float fallback, float maxValue) {
     return fallback;
 }
 
-// How far to push the far plane, as a multiple of the game's own. BAR_DRAW_DIST overrides it.
+// Set from the frontend's Graphics tab (bar_set_draw_distance). Zero means nothing has been pushed
+// yet -- during boot, or in the no-frontend build, which has no settings menu at all.
+std::atomic<float> gDrawDistanceSetting{ 0.0f };
+
+// How far to push the far plane, as a multiple of the game's own.
+//
+// BAR_DRAW_DIST wins when it is set, because it is the debugging override and needs to be able to
+// pin a value while the menu is being changed; otherwise the menu's Draw Distance setting decides,
+// and 4x is the fallback until one arrives.
 float drawDistanceScale() {
-    static const float scale = envScale("BAR_DRAW_DIST", 4.0f, 64.0f);
-    return scale;
+    static const char *const envSet = std::getenv("BAR_DRAW_DIST");
+    if (envSet != nullptr) {
+        static const float scale = envScale("BAR_DRAW_DIST", 4.0f, 64.0f);
+        return scale;
+    }
+
+    const float fromMenu = gDrawDistanceSetting.load(std::memory_order_relaxed);
+    return (fromMenu > 0.0f) ? fromMenu : 4.0f;
 }
 
 // How much wider than its own 4:3 frustum the game should be willing to CULL against.
@@ -141,6 +156,19 @@ bool restoreWidened(unsigned *l, unsigned *r) {
 }
 
 } // namespace
+
+// Pushed by the frontend once the settings menu has loaded, and again whenever it changes. Values
+// outside the sane range are ignored rather than clamped, so a bad push cannot quietly halve the
+// draw distance -- the last good value simply stays.
+extern "C" void bar_set_draw_distance(float scale) {
+    if ((scale > 0.0f) && (scale <= 64.0f)) {
+        const float previous = gDrawDistanceSetting.exchange(scale, std::memory_order_relaxed);
+        if (traceEnabled() && (previous != scale)) {
+            std::fprintf(stderr, "[frustum] Draw Distance setting -> x%.2f\n", scale);
+            std::fflush(stderr);
+        }
+    }
+}
 
 // Called from the top of the recompiled func_uvfmtx_rom_00401F74, before it reads its arguments.
 // The six values are passed by pointer so they can be rewritten in place; the caller writes them

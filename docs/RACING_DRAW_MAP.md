@@ -134,7 +134,9 @@ margins is never submitted and pops in as the camera turns toward it.
 **What is done about it.** `src/main/bar_frustum.cpp`, called from the top of the recompiled
 `func_uvfmtx_rom_00401F74`:
 
-* **Draw distance** -- the far plane is multiplied by `BAR_DRAW_DIST` (default **4**, so 300 to 1200).
+* **Draw distance** -- the far plane is multiplied by the frontend's **Graphics -> Draw Distance**
+  setting (1x / 2x / 4x, default 4x), or by `BAR_DRAW_DIST` when that is set, which wins so a
+  debugging run can pin a value while the menu is being changed (default **4**, so 300 to 1200).
   It is applied to *both* the projection matrix and the channel field, because moving the matrix's
   far plane alone would leave the game culling everything past the old one and nothing would appear.
   Projections at or beyond `far = 5000` are left alone, so the 27000 sky matrix keeps its depth range.
@@ -143,6 +145,15 @@ margins is never submitted and pops in as the camera turns toward it.
   the projection matrix: RT64 already widens the drawn view, and widening it here as well would stack
   and double-widen it. The default is deliberately generous -- culling slightly too wide costs a few
   draws that are then clipped, culling too narrow is the visible defect.
+
+**The Draw Distance setting.** It is registered from `src/frontend/bar_frontend.cpp`, not from
+RecompFrontend, because that submodule is upstream (`N64Recomp/RecompFrontend`) and this port cannot
+push to it -- `create_graphics_tab()` returns the tab's `Config`, so an extra option can just be added
+to it. Two ordering constraints make it work: the option must be added **before**
+`recompui::config::finalize()`, which is what reads `graphics.json` (an option added after it would
+never see its saved value), and the value is pushed to the renderer from `pump_events` rather than
+through `set_save_callback`, because the Graphics tab has already installed its own save callback and
+replacing it would silently stop every other graphics setting from applying.
 
 **Reaching the channel without a module data symbol.** The channel is heap-allocated by a relocatable
 module, so its address cannot be baked in (the same constraint documented in
