@@ -94,10 +94,16 @@ Two traps found on the way, worth keeping:
 
 - **`FixedRect::fullyInside(r)` reads backwards.** It returns true when *`r` is inside the receiver*,
   not when the receiver is inside `r`, so `rect.fullyInside(screen)` silently rejected every draw.
-- **`hr_option` in `graphics.json` was the string `"Expand"`**, which is not one of `HUDRatioMode`'s
-  names (`Original` / `Clamp16x9` / `Full`). nlohmann's enum mapping falls back to the first entry, so
-  the setting was silently *Original* and every origin collapsed back to the frame's centre. The code
-  default is now `Full`.
+- **`graphics.json` has two writers that disagree about one field.** `src/game/config.cpp` writes it
+  through ultramodern's `NLOHMANN_JSON_SERIALIZE_ENUM` tables; RecompFrontend's settings menu writes
+  the same path through librecomp's `Config` (`<tab id>.json`, and the tab's id is `graphics`) using
+  the menu's own display names. Every enum's names agree except `HUDRatioMode::Full`, which is
+  `"Full"` to the first and `"Expand"` to the second. Neither side throws on a name it does not know
+  — both fall back to a default — so the failure is silent in both directions, and both directions
+  were observed: with `"Expand"` in the file the loader read HUD Ratio as *Original*, which collapses
+  every origin back to the frame's centre and disables anchoring; with `"Full"` in the file the menu
+  reset HUD Placement to its own default, *Clamp16x9*. `src/game/config.cpp` now accepts either
+  spelling and writes the menu's, since the menu is the writer that wins while the frontend runs.
 
 The parked investigation is kept below, because its diagnosis of the rewriter's flicker is still the
 best account of it and the branch still exists.
