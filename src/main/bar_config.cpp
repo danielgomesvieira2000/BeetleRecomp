@@ -64,3 +64,4 @@ extern "C" float bar_timebase(float v) {
     bar_dbg_timebase(0, v);
     return v * scale;
 }
+

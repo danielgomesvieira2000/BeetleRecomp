@@ -103,6 +103,60 @@ given. The user-facing control is the **HUD Ratio** setting: *Full* anchors to t
 *Clamp16x9* anchors only as far as 16:9 (so an ultrawide keeps the HUD at 16:9 positions), and
 *Original* restores the centred placement.
 
+## The frustum BAR draws and culls against
+
+Measured with `BAR_DBG_FRUSTUM=1` (`src/main/bar_frustum.cpp`). BAR builds every perspective
+projection in one function, uvfmtx_rom's glFrustum:
+
+```
+func_uvfmtx_rom_00401F74(Mtx4F *dst, float left, float right, float top, float bottom,
+                         float near, float far)
+```
+
+and its caller, uvchannel_rom's case 4, stores the same six values in the camera channel
+(`unkDC..unkF0`) and then calls `func_uvchannel_rom_00401658`, which derives **six culling planes**
+from them. `func_uvchannel_rom_004014E8(chan, x, y, z, radius)` is the sphere-vs-frustum test the
+game asks before submitting anything. One set of six numbers therefore decides both what the
+projection draws and what the game bothers to submit.
+
+Measured in a race, twice per frame:
+
+| Destination | left/right | top/bottom | near | far | What it is |
+|---|---|---|---|---|---|
+| `0x80099E1C` | +-0.7673 | +-0.5711 | 1 | **300** | the racing camera (`&channel->unk4`) |
+| `0x80025920` | +-0.7673 | +-0.5711 | 1 | 27000 | a second, distant/sky matrix built from the same channel fields |
+
+So the racing draw distance is `far = 300`, and 0.7673 / 0.5711 = **1.344** -- the game's own frustum
+is 4:3. That is the culling defect in widescreen: RT64's Expand *draws* a wider view than that while
+the game goes on testing objects against its 4:3 planes, so anything only visible in the widened
+margins is never submitted and pops in as the camera turns toward it.
+
+**What is done about it.** `src/main/bar_frustum.cpp`, called from the top of the recompiled
+`func_uvfmtx_rom_00401F74`:
+
+* **Draw distance** -- the far plane is multiplied by `BAR_DRAW_DIST` (default **4**, so 300 to 1200).
+  It is applied to *both* the projection matrix and the channel field, because moving the matrix's
+  far plane alone would leave the game culling everything past the old one and nothing would appear.
+  Projections at or beyond `far = 5000` are left alone, so the 27000 sky matrix keeps its depth range.
+* **Culling width** -- the channel's stored left/right are widened by `BAR_CULL_WIDEN` (default
+  **1.75**, which covers 21:9; 16:9 needs 1.333). This is applied **only** to the channel, never to
+  the projection matrix: RT64 already widens the drawn view, and widening it here as well would stack
+  and double-widen it. The default is deliberately generous -- culling slightly too wide costs a few
+  draws that are then clipped, culling too narrow is the visible defect.
+
+**Reaching the channel without a module data symbol.** The channel is heap-allocated by a relocatable
+module, so its address cannot be baked in (the same constraint documented in
+`patches/viewport_patch.c`). It does not need to be: `dst` *is* `&channel->unk4`, so the channel is
+`dst - 4`. Before writing, all six stored fields are compared against the six arguments -- if the
+memory does not hold exactly what was passed, it is not a channel and is left alone.
+
+**A trap this produced, and the fix.** Widening the channel's left/right leaked: the game builds that
+second matrix (`0x80025920`, far 27000) from the same fields on a later frame, and it came out at
+aspect 2.35 against the main view's 1.34. The hook now remembers the exact bit patterns it wrote and
+restores the originals whenever a projection is built from them, so the culling planes see the
+widened sides and no projection matrix does. Matching on the bits is exact, so nothing is narrowed by
+accident.
+
 ## Negative results worth keeping
 
 * The sky is **not** wide texture rectangles: `BAR_SKIP_WIDE=150` removes the track-select screen's
@@ -119,9 +173,7 @@ given. The user-facing control is the **HUD Ratio** setting: *Full* anchors to t
 * **A 6-pixel band of flat background colour along the very top of a race frame** (framebuffer rows
   0-1): the sky geometry starts two rows down. This is not new — it was there before, hidden under
   the overscan mask's 17-row top bar — but it is visible now that the mask is gone.
-* **Culling at the new margins** has not been measured. Now that the world reaches the frame's
-  edges, drive a lap past trackside objects and watch whether anything pops in or out at the left
-  and right margins.
+* ~~**Culling at the new margins**~~ -- done; see "The frustum BAR draws and culls against" above.
 * **The results screen has not been checked** with anchoring on. Finishing a race takes minutes, so
   the state and `raceState` it runs in were never measured; if it turns out to be `state 5` with
   `raceState 0` its 2D layout will be anchored like the HUD, which is probably wrong for it.

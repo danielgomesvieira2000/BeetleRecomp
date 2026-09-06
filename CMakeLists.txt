@@ -180,6 +180,7 @@ add_executable(BeetleRecomp
     ${CMAKE_SOURCE_DIR}/src/main/hw_stubs.cpp            # native stubs for raw RCP-register libultra funcs
     ${CMAKE_SOURCE_DIR}/src/main/rt64_render_context.cpp # RT64-backed RendererContext subclass
     ${CMAKE_SOURCE_DIR}/src/main/bar_config.cpp          # feature/settings flags (fast-boot, etc.)
+    ${CMAKE_SOURCE_DIR}/src/main/bar_frustum.cpp         # draw distance + the frustum the game culls against
     ${CMAKE_SOURCE_DIR}/src/main/bar_cheats.cpp          # BAR-specific cheats (host-side RDRAM pokes)
     ${CMAKE_SOURCE_DIR}/src/main/bar_preempt.cpp         # cooperative audio-thread preemption (no-underrun)
     ${CMAKE_SOURCE_DIR}/src/main/bar_crash.cpp           # symbolized crash backtrace (debug aid)

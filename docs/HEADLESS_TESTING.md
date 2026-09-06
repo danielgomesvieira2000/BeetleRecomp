@@ -79,6 +79,10 @@ BAR_SKIP_LAUNCHER=1 BAR_SHOT_BURST="900:roll:60" \
   as they change, whether anchoring is armed, and every 2D rectangle it anchors with the class it was
   given. `BAR_HUD_ANCHOR=0` turns anchoring off, `BAR_HUD_ORTHO=0` leaves only the speedometer's
   needle unanchored. See `docs/RACING_DRAW_MAP.md`.
+- `BAR_DBG_FRUSTUM=1` -- logs every perspective frustum BAR builds (destination, the six parameters,
+  the aspect) and, once, what the draw-distance and culling-width adjustment did. `BAR_DRAW_DIST=<n>`
+  scales the far plane (default 4), `BAR_CULL_WIDEN=<n>` widens the sides the game culls against
+  (default 1.75); either at `1` is off. See `docs/RACING_DRAW_MAP.md`.
 - `BAR_DBG_RECT=1` / `BAR_DBG_PROJ=1` (RT64 fork) — every distinct 2D rectangle, and every projection
   with whether it was widened. These are what the HUD map was measured with.
 

@@ -78,7 +78,16 @@ Two things to get right:
 Take the target aspect from the host rather than hardcoding 16:9, so 21:9 works and windowed
 resizing behaves.
 
-## Phase W3 — Viewport, scissor and culling
+## Phase W3 — Viewport, scissor and culling — **culling done (6 Sep 2026)**
+
+**Status.** The culling half is done, and it did not need the empirical instrument-and-trace approach
+below: BAR's culling turned out to be a plain 6-plane frustum test derived from the same six numbers
+that build the projection, so widening those numbers widens the culling. See
+`docs/RACING_DRAW_MAP.md`, "The frustum BAR draws and culls against". The same choke point carries the
+4x draw distance.
+
+### The original plan for this phase, kept for its reasoning
+
 
 **Viewport and scissor** widen with the projection or a correct image is simply clipped back to 4:3.
 Both come from `uvGfxClipRect` + `func_uvgfxmgr_rom_00401C5C`, with the scissor derived from
