@@ -282,25 +282,46 @@ extern "C" void __osSiRawStartDma_recomp(uint8_t* rdram, recomp_context* ctx) {
     //   currentGameState (+0xA4) is 14 through the Controller Pak prompts and every front-end menu,
     //   2 for the boot attract sequence, and 5 for a race.
     //
-    //   raceState (+0x88) is 0x10000 and then 0x30000 while the race is being set up and 0 once it is
-    //   running. State 5 alone is not enough: it covers the track-loading screen ("Coventry Cove",
-    //   with its wipe tiles and its record-time text), which is a full 4:3 composition and comes
-    //   apart if its elements are pulled to the frame's edges.
+    //   raceState (+0x88) is the race's phase. State 5 alone is not enough: it also covers the
+    //   track-loading screen ("Coventry Cove", with its wipe tiles and its record-time text) and the
+    //   "Get Ready" card, which are full 4:3 compositions and come apart if pulled to the edges.
+    //
+    // The game reads raceState as an s16 -- the word's high half, so the values that arrive here as
+    // 0x10000 and 0x30000 are phases 1 and 3 -- and func_plyr_00402268 in the decomp runs the player
+    // update for phase 0 OR phase 3. That is the game's own grouping for "the car is on the track",
+    // and it is exactly the condition wanted here: phase 1 is the loading and "Get Ready" cards with
+    // no HUD, phase 3 is the countdown with the HUD already drawn, phase 0 is the race running.
+    // Anchoring only phase 0 left the HUD at its 4:3 positions through the whole countdown and then
+    // snapped it out to the edges the moment the player got control.
     {
         const int64_t GS = (int64_t)(int32_t)0x80025CF0;
         const int32_t st = (int32_t)MEM_W(0XA4, GS);          // currentGameState
-        const int32_t race = (int32_t)MEM_W(0X88, GS);        // raceState
+        const int32_t phase = (int32_t)MEM_H(0X88, GS);       // raceState, as the game reads it
         const int32_t paused = (int32_t)MEM_H(0X86, GS);      // pauseFlag
         static const bool trace = std::getenv("BAR_HUD_TRACE") != nullptr;
         if (trace) {
             static int32_t lastS = -0x7FFF, lastR = -0x7FFF, lastP = -0x7FFF;
-            if ((st != lastS) || (race != lastR) || (paused != lastP)) {
-                lastS = st; lastR = race; lastP = paused;
-                std::fprintf(stdout, "[hud] state=%d race=%d paused=%d\n", st, race, paused);
+            if ((st != lastS) || (phase != lastR) || (paused != lastP)) {
+                lastS = st; lastR = phase; lastP = paused;
+                std::fprintf(stdout, "[hud] state=%d racePhase=%d paused=%d\n", st, phase, paused);
                 std::fflush(stdout);
             }
         }
-        bar_rt64_set_hud_anchor(((st == 5) && (race == 0)) ? 1 : 0);
+        // Phase 0 is also what the field still reads at the moment currentGameState becomes 5, before
+        // the race has set it -- a stale value from before, over the film-roll wipe out of the Rumble
+        // Pak prompt. So phase 0 only counts once this race has been seen setting up (phase 1 or 3),
+        // which is reset whenever the game state changes.
+        static int32_t lastState = -0x7FFF;
+        static bool sawSetup = false;
+        if (st != lastState) {
+            lastState = st;
+            sawSetup = false;
+        }
+        if ((phase == 1) || (phase == 3)) {
+            sawSetup = true;
+        }
+
+        bar_rt64_set_hud_anchor(((st == 5) && sawSetup && ((phase == 0) || (phase == 3))) ? 1 : 0);
     }
     // R6 tooling (env-gated BAR_DBG_STATE): log currentGameState (gGameSettings+0xA4) transitions so a
     // BAR_AUTOPLAY script can be tuned/verified headlessly (boot -> logos -> intro -> menu=0xE -> race=2).

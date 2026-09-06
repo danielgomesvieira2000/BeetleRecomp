@@ -68,11 +68,30 @@ have emitted. What each measurement bought:
   which converts to the centred 4:3 region, so an element moved to an edge is drawn outside its own
   scissor and vanishes. This is exactly how the needle disappeared while its dial anchored correctly;
   anchored draws now get the two edge origins on their scissor as well.
-* **`currentGameState == 5` is not "a race".** It also covers the track-loading screen — the
-  "Coventry Cove" card with its wipe tiles and its record-time text — which is a full 4:3 composition
-  and came apart when its elements were pulled to the edges. `raceState` (`gGameSettings + 0x88`) is
-  `0x10000` and then `0x30000` while the race is being set up and `0` once it is running, so the gate
-  is `currentGameState == 5 && raceState == 0`.
+* **`currentGameState == 5` is not "a race", and `raceState == 0` is not "the HUD is up".** State 5
+  also covers the track-loading screen — the "Coventry Cove" card with its wipe tiles and its
+  record-time text — which is a full 4:3 composition and came apart when its elements were pulled to
+  the edges. `raceState` (`gGameSettings + 0x88`) narrows it, but the naive reading of it was wrong in
+  a way only visible in motion: **the HUD stayed at its 4:3 positions through the whole countdown and
+  then snapped out to the edges the instant the player got control.** Daniel caught that by playing;
+  no still frame shows it.
+
+  The game reads that field as an `s16` — the word's high half, so the values that arrive host-side as
+  `0x10000` and `0x30000` are **phases 1 and 3** — and `func_plyr_00402268` in the decomp runs its
+  player update for **phase 0 or phase 3**. That is the game's own grouping for "the car is on the
+  track", and it is exactly the condition wanted here. Measured against the captures:
+
+  | Phase | What is on screen | HUD drawn? | Anchored |
+  |---|---|---|---|
+  | 1 | the "Coventry Cove" loading card, then "Get Ready" | no | no |
+  | 3 | the 3-2-1 countdown, car on the grid | **yes** | **yes** |
+  | 0 | the race running | yes | yes |
+
+  One more wrinkle: phase 0 is *also* what the field still reads at the moment `currentGameState`
+  becomes 5, stale from before the race set it, over the film-roll wipe out of the Rumble Pak prompt.
+  So phase 0 only counts once this race has been seen setting up (phase 1 or 3), reset on any state
+  change. The gate is `currentGameState == 5 && sawSetup && (phase == 0 || phase == 3)`, and it now
+  arms exactly once per race, so there is no transition to see.
 * **The pause menu needs no special case.** It is drawn in the middle band and so classifies as
   centred; pausing mid-race leaves the menu centred and the HUD anchored, which is what it should
   look like.
