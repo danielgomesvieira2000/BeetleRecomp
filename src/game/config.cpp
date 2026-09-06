@@ -127,7 +127,7 @@ GraphicsConfig default_graphics_config() {
     c.developer_mode  = false;
     c.res_option      = Resolution::Auto;                     // display-native: render at the window/monitor resolution (integer scale)
     c.wm_option       = WindowMode::Windowed;
-    c.hr_option       = HUDRatioMode::Original;
+    c.hr_option       = HUDRatioMode::Full;                   // widescreen HUD: anchor the racing HUD to the widened frame's edges
     c.api_option      = GraphicsApi::Auto;                    // RT64 picks D3D12 on Windows / Vulkan on Linux
     c.ar_option       = AspectRatio::Original;                // BASELINE: plain 4:3 first, widescreen after
     c.msaa_option     = Antialiasing::MSAA4X;                  // seam fix 2A: 4x MSAA adds edge coverage, softening coplanar seams

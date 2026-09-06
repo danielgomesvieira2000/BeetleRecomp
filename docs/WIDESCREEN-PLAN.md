@@ -97,12 +97,27 @@ track and object code is still largely `GLOBAL_ASM`. The approach is empirical:
 culling already accepts. That yields a modestly wider view with no popping — worse than full
 widescreen, better than a broken one. Decide by time spent, not by principle.
 
-## Phase W4 — HUD and 2D (built on `wip/hud-anchoring`; parked because it glitches races)
+## Phase W4 — HUD and 2D — **done (6 Sep 2026), in the renderer rather than in a rewriter**
 
-**Status (6 Sep 2026).** The rewriter described below was built and anchoring was verified in a race,
-but with it enabled the car and background flicker and jitter. The main branch is back on the
-pre-anchoring build; the code, the rt64 change it needs, the verified result, the likely causes and
-the steps to bring it back are all in `docs/KNOWN_ISSUES.md`, "HUD anchoring in widescreen".
+**Status.** The racing HUD anchors to the widened frame's edges: speedometer and needle at the left,
+timer, lap, course map and position at the right, with the centred race messages left where they are.
+Verified in a race at 16:9 and at ~2.3:1, with the track-loading screen, the front-end menus and the
+pause menu unaffected. See `docs/RACING_DRAW_MAP.md`, "Anchoring the HUD to the widened frame", for
+the measurements and the run-time switches.
+
+**How, and why not the rewriter.** The earlier attempt (`wip/hud-anchoring`) was a host-side
+display-list rewriter that copied every list into scratch RDRAM and injected extended-GBI commands;
+it anchored correctly but made races flicker, most likely because the renderer read a list on its own
+thread while the next frame overwrote it. That whole mechanism turned out to be unnecessary. RT64
+already places 2D elements from per-element origins — BAR simply never emits any — so the fork now
+classifies BAR's draws in `RDP::drawRect` and fills the origins in directly
+(`lib/rt64/src/hle/rt64_bar_hud.cpp`). No display-list copy, no scratch region, no second thread
+reading it, and the classification sits next to the measurements it came from.
+
+The one thing the rewriter would still buy is per-element overrides by texture (`hud.json`), which
+nothing has needed so far.
+
+### The original plan for this phase, kept for its reasoning
 
 
 Measured facts that fix the design:

@@ -32,6 +32,12 @@ extern "C" uint16_t bar_poll_keyboard(int port, int8_t* stick_x, int8_t* stick_y
 // recompiled transition-start (func_selection_00402E98) and slide-draw (func_selection_00418800) to
 // see, per navigation, whether the slide draws over many frames or just 1-2 (instant). Remove after R6.
 extern "C" void bar_rt64_start_burst(const char *dir, int count);
+
+// Widescreen HUD anchoring (RT64 fork, src/hle/rt64_bar_hud.cpp): RT64 has to know when the game is
+// racing, because anchoring the HUD to the edges of the widened frame is right for the race HUD and
+// wrong for the menus, which are authored as whole 4:3 compositions. Only this side can read the
+// game's state out of RDRAM, so it pushes the answer in.
+extern "C" void bar_rt64_set_hud_anchor(int racing);
 extern "C" void bar_dbg_slide(const char* tag) {
     // Deterministic burst-capture trigger for the film-roll transition: when the animation loop
     // (func_filmroll_00400170) is entered, tell RT64 to capture the next N presents to dir/fNNNN.png.
@@ -269,6 +275,33 @@ extern "C" void __osSiRawStartDma_recomp(uint8_t* rdram, recomp_context* ctx) {
               last_div = div; last_st = st;
           }
       } }
+    // Tell RT64 whether the racing HUD is on screen, so it anchors it to the edges of the widened
+    // frame (see the extern above). Two fields of gGameSettings (0x80025CF0) are needed, both
+    // measured by running the headless race recipe with BAR_HUD_TRACE=1:
+    //
+    //   currentGameState (+0xA4) is 14 through the Controller Pak prompts and every front-end menu,
+    //   2 for the boot attract sequence, and 5 for a race.
+    //
+    //   raceState (+0x88) is 0x10000 and then 0x30000 while the race is being set up and 0 once it is
+    //   running. State 5 alone is not enough: it covers the track-loading screen ("Coventry Cove",
+    //   with its wipe tiles and its record-time text), which is a full 4:3 composition and comes
+    //   apart if its elements are pulled to the frame's edges.
+    {
+        const int64_t GS = (int64_t)(int32_t)0x80025CF0;
+        const int32_t st = (int32_t)MEM_W(0XA4, GS);          // currentGameState
+        const int32_t race = (int32_t)MEM_W(0X88, GS);        // raceState
+        const int32_t paused = (int32_t)MEM_H(0X86, GS);      // pauseFlag
+        static const bool trace = std::getenv("BAR_HUD_TRACE") != nullptr;
+        if (trace) {
+            static int32_t lastS = -0x7FFF, lastR = -0x7FFF, lastP = -0x7FFF;
+            if ((st != lastS) || (race != lastR) || (paused != lastP)) {
+                lastS = st; lastR = race; lastP = paused;
+                std::fprintf(stdout, "[hud] state=%d race=%d paused=%d\n", st, race, paused);
+                std::fflush(stdout);
+            }
+        }
+        bar_rt64_set_hud_anchor(((st == 5) && (race == 0)) ? 1 : 0);
+    }
     // R6 tooling (env-gated BAR_DBG_STATE): log currentGameState (gGameSettings+0xA4) transitions so a
     // BAR_AUTOPLAY script can be tuned/verified headlessly (boot -> logos -> intro -> menu=0xE -> race=2).
     { static const bool dbg = std::getenv("BAR_DBG_STATE") != nullptr;

@@ -44,6 +44,12 @@ texture → readback buffer → `stbi_write_png`. Three ways to request one:
 - **`RT64_SHOT_TRIGGER=<file> RT64_SHOT_OUT=<png>`** (ad-hoc fallback) — `touch` the trigger, next present
   writes the PNG and deletes the trigger.
 
+**Delete the target PNGs before each run.** They are only written when the run reaches the frame that
+asks for them, so a run that diverges or dies early leaves the *previous* run's images in place — and
+a script that waits for the file to appear then returns immediately with stale pictures. That has
+already produced one round of confident, wrong conclusions. Wait on something the current run writes
+(the last `AUTOPLAY -> phase` line in its log) or remove the files first.
+
 ```
 BAR_SKIP_LAUNCHER=1 BAR_SHOTS="510:menu.png" BAR_AUTOPLAY="120:0 30:8000 150:0 30:0800 150:0 30:8000 700:0" \
   ./BeetleRecomp.exe    # -> menu.png is the main menu, no window needed
@@ -69,6 +75,12 @@ BAR_SKIP_LAUNCHER=1 BAR_SHOT_BURST="900:roll:60" \
 - `BAR_DBG_SLIDE=1` — logs the R6 film-roll/selection trace (`E98start`, `func_filmroll_*`).
 - `BAR_DBG_FPS=1` — logs the SI-poll (game-loop) rate.
 - `BAR_DEBUG_OVERLAYS=1` — logs every module load by 4-char tag (`overlay 'frol' ...`).
+- `BAR_HUD_TRACE=1` — widescreen HUD anchoring: logs `currentGameState`, `raceState` and `pauseFlag`
+  as they change, whether anchoring is armed, and every 2D rectangle it anchors with the class it was
+  given. `BAR_HUD_ANCHOR=0` turns anchoring off, `BAR_HUD_ORTHO=0` leaves only the speedometer's
+  needle unanchored. See `docs/RACING_DRAW_MAP.md`.
+- `BAR_DBG_RECT=1` / `BAR_DBG_PROJ=1` (RT64 fork) — every distinct 2D rectangle, and every projection
+  with whether it was widened. These are what the HUD map was measured with.
 
 ## Full example (reach menu + screenshot it)
 ```

@@ -79,7 +79,30 @@ still removes the island's margins for presentation, at the cost described in th
 
 ---
 
-## HUD anchoring in widescreen — built, works, but glitches races; parked (6 Sep 2026)
+## RESOLVED — HUD anchoring in widescreen
+
+**Resolved (6 Sep 2026)** by a different mechanism, so the display-list rewriter below was never
+brought back. The racing HUD now anchors to the widened frame's edges — speedometer and needle left,
+timer, lap, map and position right — and races do not glitch, because nothing copies display lists any
+more. RT64 already places 2D elements from per-element extended-GBI origins and BAR simply never
+emits any, so the fork classifies BAR's draws in `RDP::drawRect` and supplies the origins itself
+(`lib/rt64/src/hle/rt64_bar_hud.cpp`). See `docs/RACING_DRAW_MAP.md`, "Anchoring the HUD to the
+widened frame", for the measurements, the gate (`currentGameState == 5 && raceState == 0` — state 5
+alone also covers the track-loading screen) and the run-time switches.
+
+Two traps found on the way, worth keeping:
+
+- **`FixedRect::fullyInside(r)` reads backwards.** It returns true when *`r` is inside the receiver*,
+  not when the receiver is inside `r`, so `rect.fullyInside(screen)` silently rejected every draw.
+- **`hr_option` in `graphics.json` was the string `"Expand"`**, which is not one of `HUDRatioMode`'s
+  names (`Original` / `Clamp16x9` / `Full`). nlohmann's enum mapping falls back to the first entry, so
+  the setting was silently *Original* and every origin collapsed back to the frame's centre. The code
+  default is now `Full`.
+
+The parked investigation is kept below, because its diagnosis of the rewriter's flicker is still the
+best account of it and the branch still exists.
+
+### Original entry — the display-list rewriter, parked
 
 **Status.** The main branch is the pre-anchoring widescreen build (tree of `b7aae3e`, rt64 `b39a680`):
 Expand widens the 3D world in menus and races, the menus do not flicker, the intro runs at the right
