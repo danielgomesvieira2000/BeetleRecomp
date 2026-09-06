@@ -5,7 +5,28 @@ Add the negative results, not just the leads — they are the expensive part.
 
 ---
 
-## Widescreen: the picture sits in a 275x207 island even with a full-frame scissor and viewport
+## RESOLVED -- Widescreen: the picture sat in a 275x207 island even with a full-frame scissor and viewport
+
+**Resolved (6 Sep 2026), rt64 `cebfce7`.** The island was not a transform at all: it was the game's
+own **overscan mask** painted on top of a picture that already covered the whole frame. BAR draws
+four opaque black fill rectangles that are the complement of the rectangle it renders into -- during
+a race `(0,0)-(320,17)`, `(0,224)-(320,240)`, `(0,17)-(21,223)` and `(296,17)-(320,223)`, measured
+with the new `BAR_DBG_RECT`. In Expand the top and bottom ones span the whole scissor width so RT64
+stretches them across the widened frame, while the side ones do not and stay at their 4:3 positions:
+black columns standing inside the picture with widened world visible outside them, which is exactly
+what the "island" looked like. `RDP::drawRect` now drops such a rectangle when it hugs a scissor edge
+and is no thicker than a tenth of it (`BAR_KEEP_OVERSCAN=1` restores it); the intro's cinematic
+letterbox is ~20% of the height and is kept.
+
+A second defect surfaced once the mask was gone -- the sky ended at the un-widened frame's edges --
+and had a separate cause, also fixed in that commit: RT64 was applying two different coverage tests,
+so BAR's racing projection had its matrix widened but its viewport and scissor left at 4:3. See
+`docs/RACING_DRAW_MAP.md` for both, and for what each class of draw puts on screen.
+
+The original investigation is kept below, because its negative results are still worth having.
+
+### Original entry
+
 
 **REVERTED (rt64 back to `b39a680`).** The rt64 commit `aad5142` that followed the verified build --
 the horizontal-coverage widening qualifier (`BAR_ASPECT_FB_COVER`, default 90), the diagnostics and
